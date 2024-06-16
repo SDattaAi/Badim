@@ -1,5 +1,6 @@
 import os
-import clickhouse_connect
+#import clickhouse_connect
+import clickhouse_driver
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
@@ -12,6 +13,10 @@ host = os.environ['CLICKHOUSE_HOST']
 start_date = '2024-04-01'
 end_date = '2024-05-30'
 agg_time_freq = 'no_agg'
+order_status = ['בוצעה', 'שולמה', 'מבוטלת']
+items = []
+units = ['מטר']
+supply_orders_status = ['שוחרר']
 ########
 print(password, username, port, host)
 client = 'badim'
@@ -28,16 +33,26 @@ date_trunc_func = {
     'Q': 'toStartOfQuarter',
     'Y': 'toStartOfYear'
 }.get(agg_date_update, 'toStartOfDay')
+def filter_for_query(name_of_column, filter_list):
+    if len(filter_list) == 0:
+        return ''
+    else:
+        # add quotes to string values
+        formatted_values = ", ".join([f"'{x}'" if isinstance(x, str) else str(x) for x in filter_list])
+        return f"AND {name_of_column} IN ({formatted_values})"
 
 # Directory containing the SQL scripts
 input_directory = f'/Users/guybasson/PycharmProjects/clickhouse_sql_repo/setup/{client}/generation_tables/{layer}'
 
 # Connect to ClickHouse
-client = clickhouse_connect.get_client(host=host, user=username, password=password, port=port, database=database)
+client = clickhouse_driver.Client(host=host, user=username, password=password, port=port, secure=True)
 
+sales_df = client.query_dataframe(f'''SELECT * FROM silver_badim.sales
+                            WHERE status_date >= '{start_date}' AND status_date <= '{end_date}' 
+                            {filter_for_query('order_status', order_status)}
+                             {filter_for_query('item', items)}
+                             {filter_for_query('unit', units)}''')
 
-sales_df = client.query_df(f'''SELECT * FROM silver_badim.sales
-                            WHERE status_date >= '{start_date}' AND status_date <= '{end_date}'  ''')
 # in sales_df i have date column that contains date in format '2021-01-01' or '2021-01' i want add column
 # that will contain only year and month in format '2021-01'
 print(sales_df.columns)
@@ -77,10 +92,13 @@ query_1 = f'''
     SELECT {date_trunc_func}(toDate(status_date)) as agg_date, sum(total_price) as total_price
     FROM silver_badim.sales
     WHERE toDate(status_date) >= toDate('{start_date}') AND toDate(status_date) <= toDate('{end_date}')
+    {filter_for_query('order_status', order_status)}
+    {filter_for_query('item', items)}
+    {filter_for_query('unit', units)}
     GROUP BY agg_date
     ORDER BY agg_date
 '''
-plot_1_data_clickhouse = client.query_df(query_1).set_index('agg_date')
+plot_1_data_clickhouse = client.query_dataframe(query_1).set_index('agg_date')
 # fill missing dates with 0
 plot_1_data_clickhouse = plot_1_data_clickhouse.reindex(pd.date_range(start=start_date, end=end_date)).fillna(0).resample(agg_date_update).sum()
 
@@ -125,10 +143,13 @@ query_2 = f'''
     SELECT {date_trunc_func}(toDate(status_date)) as agg_date, sum(sales) as total_sales
     FROM silver_badim.sales
     WHERE toDate(status_date) >= toDate('{start_date}') AND toDate(status_date) <= toDate('{end_date}')
+    {filter_for_query('order_status', order_status)}
+    {filter_for_query('item', items)}
+    {filter_for_query('unit', units)}
     GROUP BY agg_date
     ORDER BY agg_date
 '''
-plot_2_data_clickhouse = client.query_df(query_2).set_index('agg_date')
+plot_2_data_clickhouse = client.query_dataframe(query_2).set_index('agg_date')
 
 # fill missing dates with 0
 plot_2_data_clickhouse = plot_2_data_clickhouse.reindex(pd.date_range(start=start_date, end=end_date)).fillna(0).resample(agg_date_update).sum()
@@ -166,6 +187,9 @@ query_3 = f'''WITH
         SELECT item
         FROM silver_badim.sales
         WHERE status_date >= start_date AND status_date <= end_date
+    {filter_for_query('order_status', order_status)}
+    {filter_for_query('item', items)}
+    {filter_for_query('unit', units)}
         GROUP BY item
         ORDER BY sum(total_price) DESC
         LIMIT 7
@@ -192,7 +216,11 @@ SELECT
 FROM
     cross_join
 LEFT JOIN
-    (SELECT status_date, item, total_price FROM silver_badim.sales WHERE status_date >= start_date AND status_date <= end_date) AS sales
+    (SELECT status_date, item, total_price FROM silver_badim.sales WHERE status_date >= start_date AND status_date <= end_date
+    {filter_for_query('order_status', order_status)}
+    {filter_for_query('item', items)}
+    {filter_for_query('unit', units)}
+    ) AS sales
 ON
     cross_join.status_date = toDate(sales.status_date) AND cross_join.item = sales.item
 GROUP BY
@@ -202,7 +230,7 @@ ORDER BY
     cross_join.status_date, cross_join.item
 
 '''
-plot_3_data_clickhouse = client.query_df(query_3)
+plot_3_data_clickhouse = client.query_dataframe(query_3)
 # Pivot the data to get total price per day per item
 plot_3_data_clickhouse = plot_3_data_clickhouse.pivot_table(values='total_price', index='status_date', columns='item', aggfunc='sum')
 # add dates for missing dates and fill nan with 0 from start_date to end_date for each item
@@ -243,6 +271,9 @@ query_4 = f'''WITH
         SELECT item
         FROM silver_badim.sales
         WHERE status_date >= start_date AND status_date <= end_date
+        {filter_for_query('order_status', order_status)}
+        {filter_for_query('item', items)}
+        {filter_for_query('unit', units)}
         GROUP BY item
         ORDER BY sum(total_price) DESC
         LIMIT 10
@@ -255,12 +286,15 @@ FROM
     silver_badim.sales
 WHERE 
     status_date >= start_date AND status_date <= end_date
+    {filter_for_query('order_status', order_status)}
+    {filter_for_query('item', items)}
+    {filter_for_query('unit', units)}
 GROUP BY 
     item
 ORDER BY
     total_price DESC'''
 
-plot_4_data_clickhouse = client.query_df(query_4)
+plot_4_data_clickhouse = client.query_dataframe(query_4)
 print("plot 4 data clickhouse", plot_4_data_clickhouse.sort_values('total_price', ascending=False))
 
 # Plot the pie chart
@@ -292,7 +326,7 @@ plt.savefig('plot5.png')
 plt.show()
 ################################################# Plot 5 - clickhouse data #################################################
 
-query_5 = query_5 = f'''
+query_5 = f'''
 WITH
     '{start_date}' AS start_date,
     '{end_date}' AS end_date,
@@ -306,6 +340,9 @@ WITH
             silver_badim.sales
         WHERE
             status_date >= start_date AND status_date <= end_date
+            {filter_for_query('order_status', order_status)}
+            {filter_for_query('item', items)}
+            {filter_for_query('unit', units)}
         GROUP BY
             status_date
     ),
@@ -344,7 +381,7 @@ ORDER BY
 
 
 
-plot_5_data_clickhouse = client.query_df(query_5)
+plot_5_data_clickhouse = client.query_dataframe(query_5)
 # fill 0 from sunday to saturday if not exist
 plot_5_data_clickhouse = plot_5_data_clickhouse.set_index('day_of_week').reindex(
     ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday']).fillna(0)
@@ -359,6 +396,8 @@ plt.show()
 sales_df_agg_d_s = sales_df.groupby('status_date').agg({'total_price': 'sum'}).reset_index()
 sales_df_agg_d_s['day_of_month'] = sales_df_agg_d_s['status_date'].dt.day
 sales_df_agg_m_d = sales_df_agg_d_s.groupby('day_of_month').agg({'total_price': 'mean'}).fillna(0)
+# reindex 1 - 31
+sales_df_agg_m_d = sales_df_agg_m_d.reindex(range(1, 32)).fillna(0)
 print("plot 6 data", sales_df_agg_m_d)
 sales_df_agg_m_d.plot(kind='bar')
 plt.title('Plot 6 - Average income per day of the month')
@@ -372,7 +411,6 @@ WITH
     '{start_date}' AS start_date,
     '{end_date}' AS end_date,
 
-    -- Aggregate total price by date
     sales_by_date AS (
         SELECT
             status_date AS status_date,
@@ -381,11 +419,13 @@ WITH
             silver_badim.sales
         WHERE
             toDate(status_date) >= start_date AND toDate(status_date) <= end_date
+            {filter_for_query('order_status', order_status)}
+            {filter_for_query('item', items)}
+            {filter_for_query('unit', units)}
         GROUP BY
             status_date
     ),
 
-    -- Extract the day of the month as string
     sales_with_day_of_month AS (
         SELECT
             status_date,
@@ -395,7 +435,6 @@ WITH
             sales_by_date
     )
 
--- Calculate average total price by day of the month
 SELECT
     day_of_month_str AS day_of_month,
     AVG(total_price) AS avg_total_price
@@ -407,9 +446,11 @@ ORDER BY
     day_of_month
 '''
 
-plot_6_data_clickhouse = client.query_df(query_6)
+plot_6_data_clickhouse = client.query_dataframe(query_6)
 plot_6_data_clickhouse['day_of_month'] = plot_6_data_clickhouse['day_of_month'].astype(int)
 plot_6_data_clickhouse = plot_6_data_clickhouse.set_index('day_of_month').sort_index()
+# fill 0 from 1 to 31 if not exist
+plot_6_data_clickhouse = plot_6_data_clickhouse.reindex(range(1, 32)).fillna(0)
 print("plot 6 data clickhouse", plot_6_data_clickhouse)
 # plot
 plt.bar(plot_6_data_clickhouse.index, plot_6_data_clickhouse['avg_total_price'])
@@ -428,7 +469,7 @@ sales_df['month'] = sales_df['status_date'].dt.month
 sales_df_agg_m_s = sales_df.groupby('month').agg({'total_price': 'mean'}).fillna(0)
 print("plot 7 data", sales_df_agg_m_s)
 sales_df_agg_m_s.plot(kind='bar')
-plt.title('plot 7 - Total income per month')
+plt.title('plot 7 - average income per month')
 # save plot 7 to png
 plt.savefig('plot7.png')
 plt.show()
@@ -447,6 +488,9 @@ query_7 = f'''WITH
             silver_badim.sales
         WHERE
             toDate(status_date) >= start_date AND toDate(status_date) <= end_date
+            {filter_for_query('order_status', order_status)}
+            {filter_for_query('item', items)}
+            {filter_for_query('unit', units)}
         GROUP BY
             toMonth(toDate(status_date))
     )
@@ -461,7 +505,7 @@ ORDER BY
     month
 '''
 
-plot_7_data_clickhouse = client.query_df(query_7)
+plot_7_data_clickhouse = client.query_dataframe(query_7)
 plot_7_data_clickhouse['month'] = plot_7_data_clickhouse['month'].astype(int)
 plot_7_data_clickhouse = plot_7_data_clickhouse.set_index('month').sort_index()
 print("plot 7 data clickhouse", plot_7_data_clickhouse)
@@ -504,7 +548,8 @@ colors = ['blue', 'green', 'red', 'orange']
 categories = ['רק עור', 'רק בד', 'בד וגם עור', 'לא בד ולא עור']
 
 for category, color in zip(categories, colors):
-    pivot_df[category].plot(kind='line', ax=ax, color=color, label=category)
+    if category in pivot_df.columns:
+      pivot_df[category].plot(kind='line', ax=ax, color=color, label=category)
 print("plot 8 data", pivot_df)
 plt.title('Plot 8 - Total Price per Day for Different Categories')
 plt.legend()
@@ -536,6 +581,9 @@ WITH
             silver_badim.sales
         WHERE
             toDate(status_date) >= start_date AND toDate(status_date) <= end_date
+            {filter_for_query('order_status', order_status)}
+            {filter_for_query('item', items)}
+            {filter_for_query('unit', units)}
     ),
 
     -- Aggregate total price per day per category
@@ -565,7 +613,7 @@ ORDER BY
     date
 """
 
-plot_8_data_clickhouse = client.query_df(query_8)
+plot_8_data_clickhouse = client.query_dataframe(query_8)
 # fill missing dates with 0
 plot_8_data_clickhouse = plot_8_data_clickhouse.set_index('date').reindex(pd.date_range(start=start_date, end=end_date)).fillna(0).resample(agg_date_update).sum()
 # rename
@@ -579,8 +627,10 @@ print("plot 8 data clickhouse", plot_8_data_clickhouse)
 fig, ax = plt.subplots()
 colors = ['blue', 'green', 'red', 'orange']
 categories = ['רק עור', 'רק בד', 'בד וגם עור', 'לא בד ולא עור']
+print("plot_8_data_clickhouse", plot_8_data_clickhouse)
 for category, color in zip(categories, colors):
-    pivot_df[category].plot(kind='line', ax=ax, color=color, label=category)
+    if category in plot_8_data_clickhouse.columns:
+        plot_8_data_clickhouse[category].astype(float).plot(kind='line', ax=ax, color=color, label=category)
 plt.title('Plot 8.1 - Total Price per Day for Different Categories clickhouse')
 plt.legend()
 plt.xlabel('Date')
@@ -689,6 +739,9 @@ query_9 = f"""WITH
             silver_badim.sales
         WHERE
             toDate(status_date) >= start_date AND toDate(status_date) <= end_date
+            {filter_for_query('order_status', order_status)}
+            {filter_for_query('item', items)}
+            {filter_for_query('unit', units)}
     ),
 
     -- Aggregate total price per day per color
@@ -723,7 +776,7 @@ GROUP BY
 ORDER BY
     status_date"""
 
-plot_9_data_clickhouse = client.query_df(query_9)
+plot_9_data_clickhouse = client.query_dataframe(query_9)
 plot_9_data_clickhouse = plot_9_data_clickhouse.set_index('status_date').astype(float)
 # fill missing dates with 0
 plot_9_data_clickhouse = plot_9_data_clickhouse.reindex(pd.date_range(start=start_date, end=end_date)).fillna(0)
@@ -868,6 +921,11 @@ query_10 = f"""WITH
             SUM(total_price) AS total_price
         FROM
             silver_badim.sales
+        WHERE
+            status_date >= '{start_date}' AND status_date <= '{end_date}'
+            {filter_for_query('order_status', order_status)}
+            {filter_for_query('item', items)}
+            {filter_for_query('unit', units)}
         GROUP BY
             color
     )
@@ -884,7 +942,7 @@ ORDER BY
     color
 """
 
-plot_10_data_clickhouse = client.query_df(query_10)
+plot_10_data_clickhouse = client.query_dataframe(query_10)
 print("plot 10 data clickhouse", plot_10_data_clickhouse)
 
 # plot
@@ -923,13 +981,18 @@ query_11 = f"""SELECT
     SUM(total_price) AS total_price
 FROM
     silver_badim.sales
+WHERE
+    toDate(status_date) >= toDate('{start_date}') AND toDate(status_date) <= toDate('{end_date}')
+    {filter_for_query('order_status', order_status)}
+    {filter_for_query('item', items)}
+    {filter_for_query('unit', units)}
 GROUP BY
     date
 ORDER BY
     date
 """
 
-plot_11_data_clickhouse = client.query_df(query_11)
+plot_11_data_clickhouse = client.query_dataframe(query_11)
 plot_11_data_clickhouse = plot_11_data_clickhouse.set_index('date').reindex(pd.date_range(start=start_date, end=end_date)).fillna(0).resample(agg_date_update).sum()
 # resample the data
 sales_df11 = sales_df11.resample(agg_date_update).sum()
@@ -945,25 +1008,27 @@ plt.ylabel('Total Price')
 plt.show()
 
 ##############################################################################################################################
-supply_orders_df = client.query_df(f'''SELECT * FROM silver_badim.supply_orders
-                            WHERE date >= '{start_date}' AND date <= '{end_date}'  ''')
+supply_orders_df = client.query_dataframe(f'''SELECT * FROM silver_badim.supply_orders
+                            WHERE date >= '{start_date}' AND date <= '{end_date}'  
+                            {filter_for_query('status', supply_orders_status)}
+''')
 # save copy of csv
 supply_orders_df.to_csv('supply_orders.csv')
 # add colunm convert to ILS from USD and from EUR {'ILS': 1, 'USD': 3.7, 'EUR': 4.0}
 print(supply_orders_df.info())
 supply_orders_df['total_price'] = supply_orders_df['total_price'].astype(float)
 
-supply_orders_df['total_price_ILS'] = supply_orders_df['total_price'] * supply_orders_df['coin'].map({'ILS': 1, 'USD': 3.7, 'EUR': 4.0})
+supply_orders_df['total_expense_ILS'] = supply_orders_df['total_price'] * supply_orders_df['coin'].map({'ILS': 1, 'USD': 3.7, 'EUR': 4.0})
 print(supply_orders_df)
 
-# Plot 12 - show pie chart of total_price_ILS of status column sum of total_price_ILS the labels are in hebrew add the total_price_ILS in the pie chart
-sum_of_total_price_ILS_per_status = supply_orders_df.groupby('status').agg({'total_price_ILS': 'sum'}).reset_index()
-print("plot 12 data", sum_of_total_price_ILS_per_status)
+# Plot 12 - show pie chart of total_expense_ILS of status column sum of total_expense_ILS the labels are in hebrew add the total_expense_ILS in the pie chart
+sum_of_total_expense_ILS_per_status = supply_orders_df.groupby('status').agg({'total_expense_ILS': 'sum'}).reset_index()
+print("plot 12 data", sum_of_total_expense_ILS_per_status)
 # Format the labels to include both the status and the total price
-labels = [f"{status[::-1]} - {price:.2f} ILS" for status, price in zip(sum_of_total_price_ILS_per_status['status'], sum_of_total_price_ILS_per_status['total_price_ILS'])]
+labels = [f"{status[::-1]} - {price:.2f} ILS" for status, price in zip(sum_of_total_expense_ILS_per_status['status'], sum_of_total_expense_ILS_per_status['total_expense_ILS'])]
 
 plt.figure(figsize=(10, 7))
-plt.pie(sum_of_total_price_ILS_per_status['total_price_ILS'], labels=labels, autopct='%1.1f%%')
+plt.pie(sum_of_total_expense_ILS_per_status['total_expense_ILS'], labels=labels, autopct='%1.1f%%')
 plt.title('Plot 12 - ' + (u'סה"כ מחיר בש"ח לפי סטטוס')[::-1])
 # save plot 12 to png
 plt.savefig('plot12.png')
@@ -979,25 +1044,27 @@ SELECT
             WHEN coin = 'EUR' THEN 4.0 
             ELSE 1 
         END
-    ) AS total_price_ILS
+    ) AS total_expense_ILS
 FROM
     silver_badim.supply_orders
 WHERE
     date >= '{start_date}' AND date <= '{end_date}'
+    {filter_for_query('status', supply_orders_status)}
+    
 GROUP BY
     status
 ORDER BY
     status"""
 
-plot_12_data_clickhouse = client.query_df(query_12)
+plot_12_data_clickhouse = client.query_dataframe(query_12)
 print("plot 12 data clickhouse", plot_12_data_clickhouse)
 
 # plot
 # Format the labels to include both the status and the total price
-labels = [f"{status[::-1]} - {price:.2f} ILS" for status, price in zip(plot_12_data_clickhouse['status'], plot_12_data_clickhouse['total_price_ILS'])]
+labels = [f"{status[::-1]} - {price:.2f} ILS" for status, price in zip(plot_12_data_clickhouse['status'], plot_12_data_clickhouse['total_expense_ILS'])]
 
 plt.figure(figsize=(10, 7))
-plt.pie(plot_12_data_clickhouse['total_price_ILS'], labels=labels, autopct='%1.1f%%')
+plt.pie(plot_12_data_clickhouse['total_expense_ILS'], labels=labels, autopct='%1.1f%%')
 plt.title('Plot 12.1 - ' + (u'סה"כ מחיר בש"ח לפי סטטוס')[::-1])
 plt.show()
 
@@ -1007,20 +1074,23 @@ plt.show()
 supply_orders_df['date'] = pd.to_datetime(supply_orders_df['date'])
 supply_orders_df = supply_orders_df.rename(columns={'date': 'status_date'})
 sales_df_agg_d_s = sales_df.groupby('status_date').agg({'total_price': 'sum'}).reset_index()
-supply_orders_df_agg_d_s = supply_orders_df.groupby('status_date').agg({'total_price_ILS': 'sum'}).reset_index()
+supply_orders_df_agg_d_s = supply_orders_df.groupby('status_date').agg({'total_expense_ILS': 'sum'}).reset_index()
 supply_orders_df_agg_d_s = supply_orders_df_agg_d_s[supply_orders_df_agg_d_s['status_date'] >= '2024-04-01']
-print(supply_orders_df_agg_d_s)
+print("supply_orders_df_agg_d_s", supply_orders_df_agg_d_s)
 print(sales_df_agg_d_s)
 # Merge the two dataframes
 merged_df = pd.merge(sales_df_agg_d_s, supply_orders_df_agg_d_s, on='status_date', how='outer').fillna(0)
 merged_df['status_date'] = pd.to_datetime(merged_df['status_date'])
 merged_df = merged_df.sort_values('status_date')
-merged_df['diff'] = merged_df['total_price'] - merged_df['total_price_ILS']
+merged_df['diff'] = merged_df['total_price'] - merged_df['total_expense_ILS']
+# agg date by agg_date_update
+# reindeax the data
+merged_df = merged_df.set_index('status_date').reindex(pd.date_range(start=start_date, end=end_date)).fillna(0).resample(agg_date_update).sum().reset_index().rename(columns={'index': 'status_date'})
 # Plot 13 - Total Price (Sales) vs Total Price (Supply Orders) per Date
-print("plot 13 data", merged_df[['status_date', 'total_price', 'total_price_ILS', 'diff']])
+print("plot 13 data", merged_df)
 plt.figure(figsize=(14, 7))
 plt.plot(merged_df['status_date'], merged_df['total_price'], label='Total Price (Sales)', color='blue')
-plt.plot(merged_df['status_date'], merged_df['total_price_ILS'], label='Total Price (Supply Orders)', color='red')
+plt.plot(merged_df['status_date'], merged_df['total_expense_ILS'], label='Total Price (Supply Orders)', color='red')
 plt.plot(merged_df['status_date'], merged_df['diff'], label='Difference(income-expense)', color='green')
 plt.axvline(x=target_date, color='r', linestyle='--', label='from sap to priority')
 plt.xticks(rotation=45)
@@ -1030,7 +1100,6 @@ plt.legend()
 plt.savefig('plot13.png')
 plt.show()
 ######################################### Plot 13 - clickhouse data ########################################################
-
 query_13 = f"""WITH
     -- Aggregate sales by date
     sales_agg AS (
@@ -1040,7 +1109,11 @@ query_13 = f"""WITH
         FROM
             silver_badim.sales
         WHERE
-            toDate(status_date) >= '2024-04-01'    
+            toDate(status_date) >= '2024-04-01'
+            AND toDate(status_date) >= '{start_date}' AND status_date <= '{end_date}'
+            {filter_for_query('order_status', order_status)}
+            {filter_for_query('item', items)}
+            {filter_for_query('unit', units)}
         GROUP BY
             status_date
     ),
@@ -1056,41 +1129,61 @@ query_13 = f"""WITH
                     WHEN coin = 'EUR' THEN 4.0 
                     ELSE 1 
                 END
-            ) AS total_price_ILS
+            ) AS total_expense_ILS
         FROM
             silver_badim.supply_orders
         WHERE
             toDate(date) >= '2024-04-01'
+            AND toDate(date) >= '{start_date}' AND date <= '{end_date}'
+            {filter_for_query('status', supply_orders_status)}
         GROUP BY
             date
+    ),
+
+    -- Get all distinct dates from both tables
+    all_dates AS (
+        SELECT status_date AS date FROM sales_agg
+        UNION DISTINCT
+        SELECT date FROM supply_orders_agg
     )
 
 -- Merge the two results and calculate the difference
 SELECT
-    COALESCE(sales_agg.status_date, supply_orders_agg.date) AS status_date,
+    all_dates.date AS status_date,
     COALESCE(sales_agg.total_price, 0) AS total_price,
-    COALESCE(supply_orders_agg.total_price_ILS, 0) AS total_price_ILS,
-    COALESCE(sales_agg.total_price, 0) - COALESCE(supply_orders_agg.total_price_ILS, 0) AS diff
+    COALESCE(supply_orders_agg.total_expense_ILS, 0) AS total_expense_ILS,
+    COALESCE(sales_agg.total_price, 0) - COALESCE(supply_orders_agg.total_expense_ILS, 0) AS diff
 FROM
-    sales_agg
-FULL OUTER JOIN
-    supply_orders_agg
-ON
-    sales_agg.status_date = supply_orders_agg.date
--- filter by date from start_date until end_date
-WHERE
-    status_date >= toDate('{start_date}') AND status_date <= toDate('{end_date}')
-    
-ORDER BY
-    status_date"""
+    all_dates
 
-plot_13_data_clickhouse = client.query_df(query_13)
-print("plot 13 data clickhouse", plot_13_data_clickhouse)
+LEFT JOIN
+    sales_agg ON all_dates.date = sales_agg.status_date
+LEFT JOIN
+    supply_orders_agg ON all_dates.date = supply_orders_agg.date
+ORDER BY
+    status_date
+"""
+print("query_13", query_13)
+
+plot_13_data_clickhouse = client.query_dataframe(query_13)
+print("info plot 13 data clickhouse", plot_13_data_clickhouse.info())
+# alll columns are float exept status_date
+plot_13_data_clickhouse['status_date'] = pd.to_datetime(plot_13_data_clickhouse['status_date'])
+plot_13_data_clickhouse['total_price'] = plot_13_data_clickhouse['total_price'].astype(float)
+plot_13_data_clickhouse['total_expense_ILS'] = plot_13_data_clickhouse['total_expense_ILS'].astype(float)
+plot_13_data_clickhouse['diff'] = plot_13_data_clickhouse['diff'].astype(float)
+plot_13_data_clickhouse = plot_13_data_clickhouse.groupby('status_date').agg({'total_price': 'sum', 'total_expense_ILS': 'sum',
+                                                                            'diff': 'sum'
+
+                                                                              }).reset_index()
+print("plot 13 data clickhouse1", plot_13_data_clickhouse)
+plot_13_data_clickhouse = plot_13_data_clickhouse.set_index('status_date').reindex(pd.date_range(start=start_date, end=end_date)).fillna(0).resample(agg_date_update).sum().reset_index().rename(columns={'index': 'status_date'})
+print("plot 13 data clickhouse2", plot_13_data_clickhouse)
 
 # Plot
 plt.figure(figsize=(14, 7))
 plt.plot(plot_13_data_clickhouse['status_date'], plot_13_data_clickhouse['total_price'], label='Total Price (Sales)', color='blue')
-plt.plot(plot_13_data_clickhouse['status_date'], plot_13_data_clickhouse['total_price_ILS'], label='Total Price (Supply Orders)', color='red')
+plt.plot(plot_13_data_clickhouse['status_date'], plot_13_data_clickhouse['total_expense_ILS'], label='Total Price (Supply Orders)', color='red')
 plt.plot(plot_13_data_clickhouse['status_date'], plot_13_data_clickhouse['diff'], label='Difference(income-expense)', color='green')
 plt.axvline(x=target_date, color='r', linestyle='--', label='from sap to priority')
 plt.xticks(rotation=45)
@@ -1099,9 +1192,11 @@ plt.legend()
 plt.show()
 
 
+# raise stop
 
+raise print("stop")
 ##############################################################################################################################
-orders_df = client.query_df(f'''
+orders_df = client.query_dataframe(f'''
     SELECT 
         o.*, 
         c.country AS cust_country, 
@@ -1113,7 +1208,8 @@ orders_df = client.query_df(f'''
     ON 
         o.cust_id = c.cust_id
     WHERE 
-        o.status_date >= '{start_date}' AND o.status_date <= '{end_date}' ''')
+        o.status_date >= '{start_date}' AND o.status_date <= '{end_date}' 
+        {filter_for_query('order_status', order_status)}''')
 print(orders_df)
 # add column that will contain only year and month in format '2021-01'
 # plot 14 - hist of total_price
@@ -1135,9 +1231,10 @@ query_14 = f"""SELECT
     ON 
         o.cust_id = c.cust_id
     WHERE 
-        o.status_date >= '{start_date}' AND o.status_date <= '{end_date}'"""
+        o.status_date >= '{start_date}' AND o.status_date <= '{end_date}'
+        {filter_for_query('order_status', order_status)}"""
 
-plot_14_data_clickhouse = client.query_df(query_14)
+plot_14_data_clickhouse = client.query_dataframe(query_14)
 print("plot 14 data clickhouse", plot_14_data_clickhouse)
     
 # plot
@@ -1168,12 +1265,13 @@ ON
     o.cust_id = c.cust_id
 WHERE 
     o.status_date >= '{start_date}' AND o.status_date <= '{end_date}'
+    {filter_for_query('o.order_status', order_status)}
 GROUP BY 
     cust_country
 ORDER BY 
     total_price_with_discount DESC"""
 
-plot_15_data_clickhouse = client.query_df(query_15)
+plot_15_data_clickhouse = client.query_dataframe(query_15)
 print("plot 15 data clickhouse", plot_15_data_clickhouse)
 ## add backround color to plot
 # plot
@@ -1210,6 +1308,7 @@ query_16 = f"""WITH
             silver_badim.orders
         WHERE
             status_date >= '{start_date}' AND status_date <= '{end_date}'
+            {filter_for_query('order_status', order_status)}
         GROUP BY
             status_date
     ),
@@ -1238,7 +1337,7 @@ LEFT JOIN
 ORDER BY
     status_date"""
 
-plot_16_data_clickhouse = client.query_df(query_16)
+plot_16_data_clickhouse = client.query_dataframe(query_16)
 print("plot 16 data clickhouse", plot_16_data_clickhouse)
 
 # plot the time series for the number of orders per day
@@ -1277,11 +1376,12 @@ query_17 = f'''
         sum(total_price) AS total_price
     FROM silver_badim.sales
     WHERE toDate(status_date) >= toDate('{start_date}') AND toDate(status_date) <= toDate('{end_date}')
+    {filter_for_query('order_status', order_status)}
     GROUP BY status_date
     ORDER BY status_date
 '''
 
-plot_17_data_clickhouse = client.query_df(query_17)
+plot_17_data_clickhouse = client.query_dataframe(query_17)
 plot_17_data_clickhouse['status_date'] = pd.to_datetime(plot_17_data_clickhouse['status_date'])
 plot_17_data_clickhouse = plot_17_data_clickhouse.set_index('status_date').reindex(pd.date_range(start=start_date, end=end_date)).fillna(0).resample(agg_date_update).sum()
 plot_17_data_clickhouse['price_variance'] = plot_17_data_clickhouse['total_price'].rolling(window=window_var).var()
@@ -1313,11 +1413,12 @@ query_18 = f'''
         sum(total_price) AS total_price
     FROM silver_badim.sales
     WHERE toDate(status_date) >= toDate('{start_date}') AND toDate(status_date) <= toDate('{end_date}')
+    {filter_for_query('order_status', order_status)}
     GROUP BY status_date
     ORDER BY status_date
 '''
 
-plot_18_data_clickhouse = client.query_df(query_18)
+plot_18_data_clickhouse = client.query_dataframe(query_18)
 plot_18_data_clickhouse['status_date'] = pd.to_datetime(plot_18_data_clickhouse['status_date'])
 plot_18_data_clickhouse = plot_18_data_clickhouse.set_index('status_date').reindex(pd.date_range(start=start_date, end=end_date)).fillna(0).resample(agg_date_update).sum()
 plot_18_data_clickhouse['moving_average'] = plot_18_data_clickhouse['total_price'].rolling(window=window_trend).mean()
