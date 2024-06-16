@@ -13,6 +13,9 @@ host = os.environ['CLICKHOUSE_HOST']
 start_date = '2023-05-01'
 end_date = '2024-06-13'
 agg_time_freq = 'M'
+digits_0_2 = ['20', '10']
+digits_2_5 = []
+digits_2_8 = []
 order_status = ['בוצעה', 'שולמה', 'מבוטלת']
 items = []
 units = ['מטר']
@@ -42,6 +45,15 @@ def filter_for_query(name_of_column, filter_list):
         formatted_values = ", ".join([f"'{x}'" if isinstance(x, str) else str(x) for x in filter_list])
         return f"AND {name_of_column} IN ({formatted_values})"
 
+def filter_from_right_item_charachters(filter_list, index_of_first_char, lenght_of_chars, name_of_column='item'):
+    if len(filter_list) == 0:
+        return ''
+    else:
+        formatted_values = ", ".join([f"'{x}'" if isinstance(x, str) else str(x) for x in filter_list])
+        return f"AND SUBSTRING({name_of_column}, {index_of_first_char + 1}, {lenght_of_chars}) IN ({formatted_values})"
+
+
+
 # Directory containing the SQL scripts
 input_directory = f'/Users/guybasson/PycharmProjects/clickhouse_sql_repo/setup/{client}/generation_tables/{layer}'
 
@@ -52,7 +64,11 @@ sales_df = client.query_dataframe(f'''SELECT * FROM silver_badim.sales
                             WHERE status_date >= '{start_date}' AND status_date <= '{end_date}' 
                             {filter_for_query('order_status', order_status)}
                              {filter_for_query('item', items)}
-                             {filter_for_query('unit', units)}''')
+                             {filter_for_query('unit', units)}
+                             {filter_from_right_item_charachters(digits_0_2, 0, 2)}
+                             {filter_from_right_item_charachters(digits_2_5, 2, 3)}
+                             {filter_from_right_item_charachters(digits_2_8, 2, 6)}
+                             ''')
 
 # in sales_df i have date column that contains date in format '2021-01-01' or '2021-01' i want add column
 # that will contain only year and month in format '2021-01'
@@ -96,6 +112,9 @@ query_1 = f'''
     {filter_for_query('order_status', order_status)}
     {filter_for_query('item', items)}
     {filter_for_query('unit', units)}
+    {filter_from_right_item_charachters(digits_0_2, 0, 2)}
+    {filter_from_right_item_charachters(digits_2_5, 2, 3)}
+    {filter_from_right_item_charachters(digits_2_8, 2, 6)}
     GROUP BY agg_date
     ORDER BY agg_date
 '''
@@ -147,6 +166,9 @@ query_2 = f'''
     {filter_for_query('order_status', order_status)}
     {filter_for_query('item', items)}
     {filter_for_query('unit', units)}
+    {filter_from_right_item_charachters(digits_0_2, 0, 2)}
+                                 {filter_from_right_item_charachters(digits_2_5, 2, 3)}
+                             {filter_from_right_item_charachters(digits_2_8, 2, 6)}
     GROUP BY agg_date
     ORDER BY agg_date
 '''
@@ -191,6 +213,9 @@ query_3 = f'''WITH
     {filter_for_query('order_status', order_status)}
     {filter_for_query('item', items)}
     {filter_for_query('unit', units)}
+    {filter_from_right_item_charachters(digits_0_2, 0, 2)}
+                                 {filter_from_right_item_charachters(digits_2_5, 2, 3)}
+                             {filter_from_right_item_charachters(digits_2_8, 2, 6)}
         GROUP BY item
         ORDER BY sum(total_price) DESC
         LIMIT 7
@@ -221,6 +246,9 @@ LEFT JOIN
     {filter_for_query('order_status', order_status)}
     {filter_for_query('item', items)}
     {filter_for_query('unit', units)}
+    {filter_from_right_item_charachters(digits_0_2, 0, 2)}
+                                 {filter_from_right_item_charachters(digits_2_5, 2, 3)}
+                             {filter_from_right_item_charachters(digits_2_8, 2, 6)}
     ) AS sales
 ON
     cross_join.status_date = toDate(sales.status_date) AND cross_join.item = sales.item
@@ -275,6 +303,9 @@ query_4 = f'''WITH
         {filter_for_query('order_status', order_status)}
         {filter_for_query('item', items)}
         {filter_for_query('unit', units)}
+        {filter_from_right_item_charachters(digits_0_2, 0, 2)}
+                                     {filter_from_right_item_charachters(digits_2_5, 2, 3)}
+                             {filter_from_right_item_charachters(digits_2_8, 2, 6)}
         GROUP BY item
         ORDER BY sum(total_price) DESC
         LIMIT 10
@@ -290,6 +321,7 @@ WHERE
     {filter_for_query('order_status', order_status)}
     {filter_for_query('item', items)}
     {filter_for_query('unit', units)}
+    {filter_from_right_item_charachters(digits_0_2, 0, 2)}
 GROUP BY 
     item
 ORDER BY
@@ -344,6 +376,9 @@ WITH
             {filter_for_query('order_status', order_status)}
             {filter_for_query('item', items)}
             {filter_for_query('unit', units)}
+            {filter_from_right_item_charachters(digits_0_2, 0, 2)}
+                                         {filter_from_right_item_charachters(digits_2_5, 2, 3)}
+                             {filter_from_right_item_charachters(digits_2_8, 2, 6)}
         GROUP BY
             status_date
     ),
@@ -423,6 +458,9 @@ WITH
             {filter_for_query('order_status', order_status)}
             {filter_for_query('item', items)}
             {filter_for_query('unit', units)}
+            {filter_from_right_item_charachters(digits_0_2, 0, 2)}
+                                         {filter_from_right_item_charachters(digits_2_5, 2, 3)}
+                             {filter_from_right_item_charachters(digits_2_8, 2, 6)}
         GROUP BY
             status_date
     ),
@@ -492,6 +530,9 @@ query_7 = f'''WITH
             {filter_for_query('order_status', order_status)}
             {filter_for_query('item', items)}
             {filter_for_query('unit', units)}
+            {filter_from_right_item_charachters(digits_0_2, 0, 2)}
+                                         {filter_from_right_item_charachters(digits_2_5, 2, 3)}
+                             {filter_from_right_item_charachters(digits_2_8, 2, 6)}
         GROUP BY
             toMonth(toDate(status_date))
     )
@@ -585,6 +626,9 @@ WITH
             {filter_for_query('order_status', order_status)}
             {filter_for_query('item', items)}
             {filter_for_query('unit', units)}
+            {filter_from_right_item_charachters(digits_0_2, 0, 2)}
+                                         {filter_from_right_item_charachters(digits_2_5, 2, 3)}
+                             {filter_from_right_item_charachters(digits_2_8, 2, 6)}
     ),
 
     -- Aggregate total price per day per category
@@ -743,6 +787,9 @@ query_9 = f"""WITH
             {filter_for_query('order_status', order_status)}
             {filter_for_query('item', items)}
             {filter_for_query('unit', units)}
+            {filter_from_right_item_charachters(digits_0_2, 0, 2)}
+                                         {filter_from_right_item_charachters(digits_2_5, 2, 3)}
+                             {filter_from_right_item_charachters(digits_2_8, 2, 6)}
     ),
 
     -- Aggregate total price per day per color
@@ -927,6 +974,9 @@ query_10 = f"""WITH
             {filter_for_query('order_status', order_status)}
             {filter_for_query('item', items)}
             {filter_for_query('unit', units)}
+            {filter_from_right_item_charachters(digits_0_2, 0, 2)}
+                                         {filter_from_right_item_charachters(digits_2_5, 2, 3)}
+                             {filter_from_right_item_charachters(digits_2_8, 2, 6)}
         GROUP BY
             color
     )
@@ -987,6 +1037,9 @@ WHERE
     {filter_for_query('order_status', order_status)}
     {filter_for_query('item', items)}
     {filter_for_query('unit', units)}
+    {filter_from_right_item_charachters(digits_0_2, 0, 2)}
+                                 {filter_from_right_item_charachters(digits_2_5, 2, 3)}
+                             {filter_from_right_item_charachters(digits_2_8, 2, 6)}
 GROUP BY
     date
 ORDER BY
@@ -1115,6 +1168,9 @@ query_13 = f"""WITH
             {filter_for_query('order_status', order_status)}
             {filter_for_query('item', items)}
             {filter_for_query('unit', units)}
+            {filter_from_right_item_charachters(digits_0_2, 0, 2)}
+                                         {filter_from_right_item_charachters(digits_2_5, 2, 3)}
+                             {filter_from_right_item_charachters(digits_2_8, 2, 6)}
         GROUP BY
             status_date
     ),
@@ -1436,6 +1492,9 @@ WHERE
     {filter_for_query('item', items)}
     {filter_for_query('unit', units)}
     {filter_for_query('inv_mov_type', inv_mov_types)}
+    {filter_from_right_item_charachters(digits_0_2, 0, 2)}
+                                 {filter_from_right_item_charachters(digits_2_5, 2, 3)}
+                             {filter_from_right_item_charachters(digits_2_8, 2, 6)}
 GROUP BY    
     agg_date    
 ORDER BY
