@@ -17,6 +17,7 @@ order_status = ['בוצעה', 'שולמה', 'מבוטלת']
 items = []
 units = ['מטר']
 supply_orders_status = ['שוחרר']
+inv_mov_types = ['החזרה מלקוח','חשבוניות מס', 'משלוחים ללקוח']
 ########
 print(password, username, port, host)
 client = 'badim'
@@ -1426,3 +1427,26 @@ print("plot 18 data clickhouse", plot_18_data_clickhouse[['moving_average']])
 
 
 ##############################################################################################################################
+
+query_19 = f"""
+SELECT
+    {date_trunc_func}(toDate(update_date)) as agg_date,
+    SUM(quantity) AS total_quantity
+FROM
+    silver_badim.stock_log
+WHERE
+    toDate(update_date) >= toDate('{start_date}') AND toDate(update_date) <= toDate('{end_date}')
+    AND {filter_for_query('item', items)}
+    AND {filter_for_query('unit', units)}
+    AND {filter_for_query('inv_mov_type', inv_mov_types)}
+GROUP BY    
+    agg_date    
+ORDER BY
+    agg_date
+"""
+
+plot_19_data_clickhouse = client.query_dataframe(query_19)
+plot_19_data_clickhouse['agg_date'] = pd.to_datetime(plot_19_data_clickhouse['agg_date'])
+plot_19_data_clickhouse = plot_19_data_clickhouse.set_index('agg_date').reindex(pd.date_range(start=start_date, end=end_date)).fillna(0).resample(agg_date_update).sum()
+print("plot 19 data clickhouse", plot_19_data_clickhouse)
+

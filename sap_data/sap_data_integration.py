@@ -1,7 +1,7 @@
 import pandas as pd
 import clickhouse_driver
 import os
-
+raise Exception('Please remove this line and write your own code')
 df = pd.read_csv('sap_data_for_integration.csv')
 password = os.environ['CLICKHOUSE_PASSWORD']
 username = os.environ['CLICKHOUSE_USERNAME']
@@ -29,8 +29,9 @@ df[['supply_name', 'warehouse_name', 'UCOST', 'COST', 'USECONDCOST', 'SECONDCOST
 df['supply_name'] = df['date']
 df['update_date'] = df['date']
 df['cur_date'] = df['date']
-df[[ 'trans_id', 'line_id', 'type', 'item_warehouse', 'quantity_in_warehouse']] = None
+df[[ 'trans_id', 'line_id', 'type',]] = None
 
+df[ 'trans_id']  ='0'
 client = clickhouse_driver.Client(host=host, user=username, password=password, port=port, secure=True)
 
 query = '''SELECT 
@@ -47,7 +48,7 @@ df['quantity_in_warehouse'] = 0.0
 df = df[['cur_date', 'inv_mov_type', 'doc_no', 'cust_id', 'cust_name', 'supply_id', 'supply_name',
          'warehouse_name', 'item', 'desc_he', 'quantity', 'unit', 'UCOST', 'COST', 'USECONDCOST',
          'SECONDCOST', 'coin', 'to_warehouse_name', 'general_item'
-, 'update_date', 'trans_id', 'line_id', 'type', 'item_warehouse', 'quantity_in_warehouse']]
+, 'update_date', 'trans_id', 'line_id', 'type']]
 
 
 df[['UCOST', 'COST','USECONDCOST','SECONDCOST']] = 0.0
@@ -60,7 +61,7 @@ print(df.info())
 client.execute('''
 INSERT INTO silver_badim.stock_log
 (cur_date, inv_mov_type, doc_no, cust_id, cust_name, supply_id, supply_name, warehouse_name, item, desc_he, quantity, unit, UCOST, COST, USECONDCOST, SECONDCOST, coin, to_warehouse_name, 
-general_item, update_date, trans_id, line_id, type, item_warehouse, quantity_in_warehouse)
+general_item, update_date, trans_id, line_id, type)
 VALUES
 ''', df.to_dict(orient='records'))
 
