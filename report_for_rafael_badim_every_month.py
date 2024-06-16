@@ -10,14 +10,14 @@ username = os.environ['CLICKHOUSE_USERNAME']
 port = int(os.environ['CLICKHOUSE_PORT'])
 host = os.environ['CLICKHOUSE_HOST']
 ######
-start_date = '2024-04-01'
-end_date = '2024-05-30'
-agg_time_freq = 'no_agg'
+start_date = '2023-05-01'
+end_date = '2024-06-13'
+agg_time_freq = 'M'
 order_status = ['בוצעה', 'שולמה', 'מבוטלת']
 items = []
 units = ['מטר']
 supply_orders_status = ['שוחרר']
-inv_mov_types = ['החזרה מלקוח','חשבוניות מס', 'משלוחים ללקוח']
+inv_mov_types = ['החזרה מלקוח','חשבוניות מס', 'דאטה מסאפ','משלוחים ללקוח']
 ########
 print(password, username, port, host)
 client = 'badim'
@@ -1193,9 +1193,6 @@ plt.legend()
 plt.show()
 
 
-# raise stop
-
-raise print("stop")
 ##############################################################################################################################
 orders_df = client.query_dataframe(f'''
     SELECT 
@@ -1436,17 +1433,30 @@ FROM
     silver_badim.stock_log
 WHERE
     toDate(update_date) >= toDate('{start_date}') AND toDate(update_date) <= toDate('{end_date}')
-    AND {filter_for_query('item', items)}
-    AND {filter_for_query('unit', units)}
-    AND {filter_for_query('inv_mov_type', inv_mov_types)}
+    {filter_for_query('item', items)}
+    {filter_for_query('unit', units)}
+    {filter_for_query('inv_mov_type', inv_mov_types)}
 GROUP BY    
     agg_date    
 ORDER BY
     agg_date
 """
-
+print("query_19", query_19)
 plot_19_data_clickhouse = client.query_dataframe(query_19)
 plot_19_data_clickhouse['agg_date'] = pd.to_datetime(plot_19_data_clickhouse['agg_date'])
 plot_19_data_clickhouse = plot_19_data_clickhouse.set_index('agg_date').reindex(pd.date_range(start=start_date, end=end_date)).fillna(0).resample(agg_date_update).sum()
 print("plot 19 data clickhouse", plot_19_data_clickhouse)
+
+# plot time series of total quantity
+plt.figure(figsize=(10, 5))
+plt.plot(plot_19_data_clickhouse['total_quantity'], label='Total Quantity', color='blue')
+plt.xlabel('Date')
+plt.ylabel('Total Quantity from Stock')
+plt.title('Plot 19 - Total Quantity Over Time clickhouse')
+plt.legend()
+plt.grid(True)
+# save plot 19 to png
+plt.savefig('plot19.png')
+plt.show()
+
 
