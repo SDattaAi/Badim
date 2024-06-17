@@ -8,6 +8,8 @@ from sdtla.quey_utils import filter_for_query, filter_from_right_item_charachter
 from statsforecast import StatsForecast
 from statsforecast.models import Naive, SeasonalNaive, WindowAverage, SeasonalWindowAverage
 import warnings
+# drop warinings
+warnings.filterwarnings('ignore')
 
 
 # Fetch environment variables
@@ -26,7 +28,7 @@ digits_2_5 = []
 digits_2_8 = []
 inv_mov_types = ['החזרה מלקוח', 'חשבוניות מס', 'דאטה מסאפ', 'משלוחים ללקוח']
 start_date_test = '2024-01-01'
-num_of_folds=36
+num_of_folds=24
 
 models  = [
     Naive(alias='naive'),
@@ -44,7 +46,7 @@ print(password, username, port, host)
 client_name = 'badim'
 layer = 'silver'
 database = f'{layer}_{client_name}'
-
+best_models = {}
 if __name__ == "__main__":
 
     # Connect to ClickHouse
@@ -99,8 +101,9 @@ if __name__ == "__main__":
 
     for unique_id in all_data['unique_id'].unique():
         print("unique_id", unique_id)
-        train = all_data[(all_data['unique_id'] == unique_id) & (all_data['ds'] < start_date_test)]
-        test = all_data[(all_data['unique_id'] == unique_id) & (all_data['ds'] >= start_date_test)]
+        all_data_unique_id = all_data[all_data['unique_id'] == unique_id]
+        train = all_data_unique_id[(all_data_unique_id['ds'] < start_date_test)]
+        test = all_data_unique_id[(all_data_unique_id['ds'] >= start_date_test)]
         model = StatsForecast(
             models=models,
             freq=agg_time_freq,
@@ -114,21 +117,37 @@ if __name__ == "__main__":
         )
 
         # Fit the model
-        for unique_id in train['unique_id'].unique():
-            print("unique_id", unique_id)
-            unique_id_crossvalidation_df = crossvalidation_df[crossvalidation_df.index == unique_id]
-            cutoff_list = unique_id_crossvalidation_df['cutoff'].unique()
-            all_rmse = {}
-            for k in range(min(len(cutoff_list), num_of_folds)):  # Limit to 3 cutoffs
-                cv = unique_id_crossvalidation_df[unique_id_crossvalidation_df['cutoff'] == cutoff_list[k]]
-                cutoff = cutoff_list[k]
-                cv = cv.drop(columns='cutoff')
-                cv = cv.reset_index(drop=True)
-                cv = cv.set_index('ds')
-                train_for_plot = train[(train['unique_id'] == unique_id) & (train['ds'] <= cutoff)]
-                k_rmses = cv.loc[:, cv.columns != 'cutoff'].apply(lambda x: rmse(x, cv["y"]), axis=0).to_dict()
-                all_rmse[k] = k_rmses
+        unique_id_crossvalidation_df = crossvalidation_df[crossvalidation_df.index == unique_id]
+        cutoff_list = unique_id_crossvalidation_df['cutoff'].unique()
+        all_rmse_train = {}
+        for k in range(min(len(cutoff_list), num_of_folds)):  # Limit to 3 cutoffs
+            cv = unique_id_crossvalidation_df[unique_id_crossvalidation_df['cutoff'] == cutoff_list[k]]
+            cutoff = cutoff_list[k]
+            cv = cv.drop(columns='cutoff')
+            cv = cv.reset_index(drop=True)
+            cv = cv.set_index('ds')
+            k_rmses_train = cv.loc[:, cv.columns != 'cutoff'].apply(lambda x: rmse(x, cv["y"]), axis=0).to_dict()
+            all_rmse_train[k] = k_rmses_train
 
-            mean_rmse = pd.DataFrame(all_rmse).mean(axis=1)
-            print("mean_rmse", mean_rmse.sort_values().dropna())
+        mean_rmse_train = pd.DataFrame(all_rmse_train).mean(axis=1).to_frame().rename(columns={0: 'train'}).dropna().sort_values(by='train')
+        # set column name to train
+        best_models[unique_id] = mean_rmse_train.idxmin()
+        crossvalidation_df_for_test = model.cross_validation(
+            df=all_data_unique_id,
+            h=1,
+            step_size=1,
+            n_windows=len(test)
+        )
+        all_rmse_test = {}
+        for j in range(len(test)):
+            cv = crossvalidation_df_for_test[crossvalidation_df_for_test['cutoff'] == test['ds'].iloc[j]]
+            cv = cv.drop(columns='cutoff')
+            cv = cv.reset_index(drop=True)
+            cv = cv.set_index('ds')
+            k_rmses_test = cv.loc[:, cv.columns != 'cutoff'].apply(lambda x: rmse(x, cv["y"]), axis=0).to_dict()
+            all_rmse_test[j] = k_rmses_test
 
+        mean_rmse_test = pd.DataFrame(all_rmse_test).mean(axis=1).to_frame().rename(columns={0: 'test'}).dropna().sort_values(by='test')
+        # merge left
+        mean_rmse = mean_rmse_train.merge(mean_rmse_test, left_index=True, right_index=True, how='left')
+        print("mean_rmse", mean_rmse)
