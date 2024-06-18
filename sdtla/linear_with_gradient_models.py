@@ -3,11 +3,15 @@ import clickhouse_driver
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-from datasetsforecast.losses import rmse
+from datasetsforecast.losses import mae
+from sklearn.metrics import mean_absolute_percentage_error as mape
 from sdtla.quey_utils import filter_for_query, filter_from_right_item_charachters
 from statsforecast import StatsForecast
+from statsforecast.models import AutoARIMA
+import warnings
 
-from statsforecast.models import Naive, SeasonalNaive, WindowAverage, SeasonalWindowAverage
+# drop warinings
+warnings.filterwarnings('ignore')
 
 # Fetch environment variables
 password = os.environ['CLICKHOUSE_PASSWORD']
@@ -19,23 +23,22 @@ host = os.environ['CLICKHOUSE_HOST']
 start_date = '2019-01-01'
 end_date = '2024-06-30'
 agg_time_freq = 'M'
-items = ['20009902', '20004028']
+items = ['20009902']
 digits_0_2 = []
 digits_2_5 = []
 digits_2_8 = []
 inv_mov_types = ['החזרה מלקוח', 'חשבוניות מס', 'דאטה מסאפ', 'משלוחים ללקוח']
 start_date_test = '2024-01-01'
+num_of_folds = 36
 
-num_of_folds = 5
+models = [AutoARIMA()]
 
 print(password, username, port, host)
 client_name = 'badim'
 layer = 'silver'
 database = f'{layer}_{client_name}'
-
-
+final_results = {}
 if __name__ == "__main__":
-
     # Connect to ClickHouse
     client = clickhouse_driver.Client(host=host, user=username, password=password, port=port, secure=True)
 
@@ -47,12 +50,9 @@ if __name__ == "__main__":
                              {filter_from_right_item_charachters(digits_2_5, 2, 3)}
                              {filter_from_right_item_charachters(digits_2_8, 2, 6)}
                                       '''
-    print(query)
+
     sales_df = client.query_dataframe(query)
     # i want add unique id ass hierarchy of the first 2 digits
-
-    print(sales_df.head())
-    print(sales_df.columns)
 
     df_final = pd.DataFrame(columns=['ds', 'unique_id', 'y'])
     # Filter and prepare data
@@ -80,80 +80,37 @@ if __name__ == "__main__":
                                  axis=0).groupby(['ds', 'unique_id']).sum().reset_index()
 
     sales_df_grouped = sales_df_grouped.sort_values(['unique_id', 'ds'])
-
-    print("sales_df_grouped", sales_df_grouped)
-
+    map_from_date_to_int = {date: i for i, date in enumerate(sales_df_grouped['ds'].sort_values().astype(str).unique())}
+    print("map_from_date_to_int:", map_from_date_to_int)
+    sales_df_grouped['ds'] = sales_df_grouped['ds'].astype(str).map(map_from_date_to_int)
+    # find the last day in start_date_test month as yyyy-mm-dd
+    last_day_start_date_test = pd.to_datetime(start_date_test) + pd.offsets.MonthEnd(0)
+    last_day_start_date_test = last_day_start_date_test.strftime('%Y-%m-%d')
+    start_date_test_int = map_from_date_to_int[last_day_start_date_test]
+    print(sales_df_grouped)
     # Train data preparation
     all_data = sales_df_grouped.copy()
-    train = all_data[all_data['ds'] < start_date_test]
-    print("train", train)
-    print("train.info", train.info())
-
-    # Initialize the StatsForecast model with the desired models
+    train = all_data[all_data['ds'] < start_date_test_int]
+    test = all_data[all_data['ds'] >= start_date_test_int]
+    print("train:", train)
+    print("test:", test)
     model = StatsForecast(
-        models=[
-            Naive(),
-            SeasonalNaive(season_length=12),
-            WindowAverage(window_size=6),
-            SeasonalWindowAverage(window_size=2, season_length=2),
-        ],
-        freq=agg_time_freq,
-        n_jobs=-1
-    )
-    # Fit the model
-    crossvalidation_df = model.cross_validation(
-        df=train,
-        h=4,
-        step_size=9,
-        n_windows=num_of_folds
-    )
+        models=models, freq=1, verbose=True)
+    print(train['y'].tolist())
+    model.fit(train)
 
-    print("crossvalidation_df", crossvalidation_df)
+    forecast = model.predict(h=len(test['ds'].unique())).reset_index()
+    print(f'forecast: {forecast}')
 
-    for unique_id in train['unique_id'].unique():
-        print("unique_id", unique_id)
-        unique_id_crossvalidation_df = crossvalidation_df[crossvalidation_df.index == unique_id]
-        cutoff_list = unique_id_crossvalidation_df['cutoff'].unique()
-
-        fig, axes = plt.subplots(nrows=num_of_folds, ncols=1, figsize=(16, 15), sharex=True)
-        all_rmse = {}
-
-        for k in range(min(len(cutoff_list), num_of_folds)):  # Limit to 3 cutoffs
-            cv = unique_id_crossvalidation_df[unique_id_crossvalidation_df['cutoff'] == cutoff_list[k]]
-            cutoff = cutoff_list[k]
-            print("cutoff", cutoff)
-            cv = cv.drop(columns='cutoff')
-            cv = cv.reset_index(drop=True)
-            cv = cv.set_index('ds')
-            print("1", cv)
-            print("2", cv.loc[:, cv.columns != 'cutoff'])
-
-            train_for_plot = train[(train['unique_id'] == unique_id) & (train['ds'] <= cutoff)]
-
-            # Plot on the k-th subplot
-            ax = axes[k]
-            ax.plot(train_for_plot['ds'], train_for_plot['y'], label='Training Data')
-            k_rmses = cv.loc[:, cv.columns != 'cutoff'].apply(lambda x: rmse(x, cv["y"]), axis=0).to_dict()
-            k_rmses_for_plot = cv.loc[:, cv.columns != 'cutoff'].apply(lambda x: f'RMSE: {rmse(x, cv["y"]):.2f}',
-                                                              axis=0)
-            all_rmse[k] = k_rmses
-            # Plot cross validation data
-            for column in cv.columns:
-                if column == 'y':
-                    ax.plot(cv.index, cv[column], label=f'Cross Validation {column}', linestyle='--')
-                else:
-                    ax.plot(cv.index, cv[column], label=f'Cross Validation {column}')
-
-            ax.set_title(f'Fold number: {k} rmse: {k_rmses_for_plot}')
-
-            ax.legend()
-
-        # Adjust layout and show the plot
-        folds_rmse = pd.DataFrame(all_rmse).mean(axis=1).to_dict()
-
-        folds_rmse = '\n '.join([f'{key}: {np.round(value, 2)}' for key, value in folds_rmse.items()])
-        fig.suptitle(f'Unique ID: {unique_id}, agg_time_freq: {agg_time_freq}\nmean RMSE: \n{folds_rmse}', fontsize=16)
-        plt.tight_layout(rect=[0, 0, 1, 0.95])
+    for unique_id in all_data['unique_id'].unique()[:100]:
+        # plot train and test and prediction
+        all_data_unique_id = all_data[all_data['unique_id'] == unique_id]
+        train_unique_id = all_data_unique_id[(all_data_unique_id['ds'] < start_date_test_int)]
+        test_unique_id = all_data_unique_id[(all_data_unique_id['ds'] >= start_date_test_int)]
+        forecast_unique_id = forecast[forecast['unique_id'] == unique_id]
+        plt.plot(train_unique_id['ds'], train_unique_id['y'], label='train')
+        plt.plot(test_unique_id['ds'], test_unique_id['y'], label='test')
+        plt.plot(forecast_unique_id['ds'], forecast_unique_id['AutoARIMA'], label='AutoARIMA')
+        plt.legend()
         plt.show()
-
 

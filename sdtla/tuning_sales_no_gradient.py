@@ -4,6 +4,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 from datasetsforecast.losses import mae
+from sklearn.metrics import mean_absolute_percentage_error as mape
 from sdtla.quey_utils import filter_for_query, filter_from_right_item_charachters
 from statsforecast import StatsForecast
 from statsforecast.models import Naive, SeasonalNaive, WindowAverage, SeasonalWindowAverage
@@ -34,9 +35,6 @@ models = []
 
 # Add SeasonalNaive models with season_length ranging from 1 to 12
 for number in range(1, 13):
-    models.append(SeasonalNaive(season_length=number, alias=f'seasonal_naive_{number}'))
-    if number != 1:
-      models.append(WindowAverage(window_size=number, alias=f'window_average_{number}'))
     for number2 in range(1, 13):
         models.append(SeasonalWindowAverage(window_size=number, season_length=number2,
                                             alias=f'seasonal_window_average_{number}_{number2}'))
@@ -45,7 +43,6 @@ print(password, username, port, host)
 client_name = 'badim'
 layer = 'silver'
 database = f'{layer}_{client_name}'
-best_models = {}
 final_results = {}
 if __name__ == "__main__":
 
@@ -115,18 +112,30 @@ if __name__ == "__main__":
         unique_id_crossvalidation_df = crossvalidation_df[crossvalidation_df.index == unique_id]
         cutoff_list = unique_id_crossvalidation_df['cutoff'].unique()
         all_mae_train = {}
+        all_mape_train = {}
         for k in range(min(len(cutoff_list), num_of_folds)):
             cv = unique_id_crossvalidation_df[unique_id_crossvalidation_df['cutoff'] == cutoff_list[k]]
             cutoff = cutoff_list[k]
             cv = cv.drop(columns='cutoff')
             cv = cv.reset_index(drop=True)
             cv = cv.set_index('ds')
-            k_maes_train = cv.loc[:, cv.columns != 'cutoff'].apply(lambda x: mae(x, cv["y"]), axis=0).to_dict()
-            all_mae_train[k] = k_maes_train
+            # turn column to rows
+            print(cv.loc[:, cv.columns != 'cutoff'].transpose())
+            # replace nan to np.nan
 
-        mean_mae_train = pd.DataFrame(all_mae_train).dropna()
+            df_mae = cv.loc[:, cv.columns != 'cutoff']
+            df_mape = cv.loc[:, cv.columns != 'cutoff']
+            # replace nan to -1
+            df_mae = df_mae.fillna(-1).apply(lambda x: mae(x, cv["y"]), axis=0)
+            df_mape = df_mape.fillna(-1).apply(lambda x: mape(x, cv["y"]), axis=0)
+            k_maes_train = df_mae.to_dict()
+            k_mape_train = df_mape.to_dict()
+            all_mae_train[k] = k_maes_train
+            all_mape_train[k] = k_mape_train
+
+        folds_mae_train = pd.DataFrame(all_mae_train)
+        folds_mapes_train = pd.DataFrame(all_mape_train)
         # set column name to train
-        best_models[unique_id] = mean_mae_train.idxmin()
         crossvalidation_df_for_test = model.cross_validation(
             df=all_data_unique_id,
             h=1,
@@ -134,35 +143,49 @@ if __name__ == "__main__":
             n_windows=len(test)
         )
         all_mae_test = {}
-        for j in range(len(test) - 1) :
+        all_mape_test = {}
+        for j in range(len(test) - 1):
             cv = crossvalidation_df_for_test[crossvalidation_df_for_test['cutoff'] == test['ds'].iloc[j]]
             cv = cv.drop(columns='cutoff')
             cv = cv.reset_index(drop=True)
             cv = cv.set_index('ds')
-            k_maes_test = cv.loc[:, cv.columns != 'cutoff'].apply(lambda x: mae(x, cv["y"]), axis=0).to_dict()
+            df_mae = cv.loc[:, cv.columns != 'cutoff']
+            df_mape = cv.loc[:, cv.columns != 'cutoff']
+            df_mae = df_mae.fillna(-1).apply(lambda x: mae(x, cv["y"]), axis=0)
+            df_mape = df_mape.fillna(-1).apply(lambda x: mape(x, cv["y"]), axis=0)
+            k_maes_test = df_mae.to_dict()
+            k_mapes_test = df_mape.to_dict()
             all_mae_test[j] = k_maes_test
+            all_mape_test[j] = k_mapes_test
 
-        mean_mae_test = pd.DataFrame(all_mae_test).dropna()
+        folds_mae_test = pd.DataFrame(all_mae_test)
+        folds_mapes_test = pd.DataFrame(all_mape_test)
         # add for columns + k
-        mean_mae_test.columns = [int(col) + int(k + 1) for col in mean_mae_test.columns]
+        folds_mae_test.columns = [int(col) + int(k + 1) for col in folds_mae_test.columns]
+        folds_mapes_test.columns = [int(col) + int(k + 1) for col in folds_mapes_test.columns]
         # merge left
-        mean_mae = mean_mae_train.merge(mean_mae_test, left_index=True, right_index=True, how='left')
-        print("mean_mae.columns", mean_mae.columns)
+        folds_mae = folds_mae_train.merge(folds_mae_test, left_index=True, right_index=True, how='left')
+        folds_mapes = folds_mapes_train.merge(folds_mapes_test, left_index=True, right_index=True, how='left')
+        print("folds_mae.columns", folds_mae.columns)
 
+        print("folds_mae", folds_mae)
+        print("folds_mapes", folds_mapes)
+        final_results[unique_id] = {}
 
-        print("mean_mae", mean_mae)
-        final_results[unique_id] = mean_mae.to_dict()
+        final_results[unique_id]['MAE'] = folds_mae.to_dict()
+        final_results[unique_id]['MAPE'] = folds_mapes.to_dict()
         # plot heatmap for each unique_id
-        fig, ax = plt.subplots(figsize=(16, 10))
-        ax.imshow(mean_mae, cmap='viridis', interpolation='nearest')
-        ax.set_xticks(np.arange(mean_mae.shape[1]))
-        ax.set_yticks(np.arange(mean_mae.shape[0]))
-        ax.set_xticklabels(mean_mae.columns)
-        ax.set_yticklabels(mean_mae.index)
-        plt.setp(ax.get_xticklabels(), rotation=45, ha="right", rotation_mode="anchor")
-        plt.show()
+        # fig, ax = plt.subplots(figsize=(16, 10))
+        # ax.imshow(folds_mae, cmap='viridis', interpolation='nearest')
+        # ax.set_xticks(np.arange(folds_mae.shape[1]))
+        # ax.set_yticks(np.arange(folds_mae.shape[0]))
+        # ax.set_xticklabels(folds_mae.columns)
+        # ax.set_yticklabels(folds_mae.index)
+        # plt.setp(ax.get_xticklabels(), rotation=45, ha="right", rotation_mode="anchor")
+        # plt.show()
 
 # save the results as pickle
-import json
-with open('best_no_gradient_models.json', 'w') as f:
-    json.dump(final_results, f)
+import pickle
+
+with open('no_gradient_models.pickle', 'wb') as f:
+    pickle.dump(final_results, f)
