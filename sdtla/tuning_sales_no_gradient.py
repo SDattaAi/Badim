@@ -1,13 +1,8 @@
 import os
 import clickhouse_driver
-import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-from datasetsforecast.losses import mae
-from sklearn.metrics import mean_absolute_percentage_error as mape
 from sdtla.quey_utils import filter_for_query, filter_from_right_item_charachters
-from statsforecast import StatsForecast
-from statsforecast.models import Naive, SeasonalNaive, WindowAverage, SeasonalWindowAverage
 import warnings
 
 # drop warinings
@@ -21,7 +16,7 @@ host = os.environ['CLICKHOUSE_HOST']
 
 # Parameters
 start_date = '2019-01-01'
-end_date = '2024-06-30'
+end_date = '2024-05-31'
 agg_time_freq = 'M'
 items = []
 digits_0_2 = []
@@ -29,21 +24,16 @@ digits_2_5 = []
 digits_2_8 = []
 inv_mov_types = ['החזרה מלקוח', 'חשבוניות מס', 'דאטה מסאפ', 'משלוחים ללקוח']
 start_date_test = '2024-01-01'
-num_of_folds = 36
 
-models = []
 
-# Add SeasonalNaive models with season_length ranging from 1 to 12
-for number in range(1, 13):
-    for number2 in range(1, 13):
-        models.append(SeasonalWindowAverage(window_size=number, season_length=number2,
-                                            alias=f'seasonal_window_average_{number}_{number2}'))
 
 print(password, username, port, host)
 client_name = 'badim'
 layer = 'silver'
 database = f'{layer}_{client_name}'
 final_results = {}
+max_number_of_seasons = 12
+max_number_of_windows = 12
 if __name__ == "__main__":
 
     # Connect to ClickHouse
@@ -90,102 +80,73 @@ if __name__ == "__main__":
 
     # Train data preparation
     all_data = sales_df_grouped.copy()
+    results_linear_no_gradient = {}
+    len_unique_ids = len(all_data['unique_id'].unique())
+    number_of_folds_in_future = max_number_of_seasons
+    max_date = all_data['ds'].max()
+    max_date_plus_1_end_of_month = pd.to_datetime(max_date) + pd.DateOffset(months=1) - pd.DateOffset(days=1)
+    range_of_end_dates = pd.date_range(start=max_date_plus_1_end_of_month, periods=number_of_folds_in_future,
+                                        freq=agg_time_freq)
+    # a
+    print("range_of_end_dates", range_of_end_dates)
+    i = 1
+    results = []
 
     for unique_id in all_data['unique_id'].unique():
+
         print("unique_id:", unique_id)
-        all_data_unique_id = all_data[all_data['unique_id'] == unique_id]
-        train = all_data_unique_id[(all_data_unique_id['ds'] < start_date_test)]
-        test = all_data_unique_id[(all_data_unique_id['ds'] >= start_date_test)]
-        model = StatsForecast(
-            models=models,
-            freq=agg_time_freq,
-            n_jobs=-1
-        )
-        crossvalidation_df = model.cross_validation(
-            df=train,
-            h=1,
-            step_size=1,
-            n_windows=num_of_folds
-        )
+        print(f"{i}/{len_unique_ids}")
+        i += 1
+        unique_id_data = all_data[all_data['unique_id'] == unique_id]
+        # fill missing dates
+        unique_id_data = unique_id_data.set_index('ds').resample(agg_time_freq).asfreq().reset_index()
+        # add range_of_end_dates
+        unique_id_data = pd.concat([unique_id_data, pd.DataFrame({'ds': range_of_end_dates})])
+        unique_id_data['unique_id'] = unique_id
+        unique_id_data = unique_id_data.sort_values('ds')
+        unique_id_data['ds'] = unique_id_data['ds'].dt.strftime('%Y-%m-%d')
+        for w in range(1, max_number_of_windows + 1):
+            for s in range(1, max_number_of_seasons + 1):
+                df_with_w_s = unique_id_data.copy()
+                df_with_w_s['s'] = s
+                df_with_w_s['w'] = w
+                df_with_w_s['SWA_value'] = df_with_w_s['y'].shift(s).rolling(w).mean()
 
-        # Fit the model
-        unique_id_crossvalidation_df = crossvalidation_df[crossvalidation_df.index == unique_id]
-        cutoff_list = unique_id_crossvalidation_df['cutoff'].unique()
-        all_mae_train = {}
-        all_mape_train = {}
-        for k in range(min(len(cutoff_list), num_of_folds)):
-            cv = unique_id_crossvalidation_df[unique_id_crossvalidation_df['cutoff'] == cutoff_list[k]]
-            cutoff = cutoff_list[k]
-            cv = cv.drop(columns='cutoff')
-            cv = cv.reset_index(drop=True)
-            cv = cv.set_index('ds')
-            # turn column to rows
-            print(cv.loc[:, cv.columns != 'cutoff'].transpose())
-            # replace nan to np.nan
+                results.append(df_with_w_s)
 
-            df_mae = cv.loc[:, cv.columns != 'cutoff']
-            df_mape = cv.loc[:, cv.columns != 'cutoff']
-            # replace nan to -1
-            df_mae = df_mae.fillna(-1).apply(lambda x: mae(x, cv["y"]), axis=0)
-            df_mape = df_mape.fillna(-1).apply(lambda x: mape(x, cv["y"]), axis=0)
-            k_maes_train = df_mae.to_dict()
-            k_mape_train = df_mape.to_dict()
-            all_mae_train[k] = k_maes_train
-            all_mape_train[k] = k_mape_train
 
-        folds_mae_train = pd.DataFrame(all_mae_train)
-        folds_mapes_train = pd.DataFrame(all_mape_train)
-        # set column name to train
-        crossvalidation_df_for_test = model.cross_validation(
-            df=all_data_unique_id,
-            h=1,
-            step_size=1,
-            n_windows=len(test)
-        )
-        all_mae_test = {}
-        all_mape_test = {}
-        for j in range(len(test) - 1):
-            cv = crossvalidation_df_for_test[crossvalidation_df_for_test['cutoff'] == test['ds'].iloc[j]]
-            cv = cv.drop(columns='cutoff')
-            cv = cv.reset_index(drop=True)
-            cv = cv.set_index('ds')
-            df_mae = cv.loc[:, cv.columns != 'cutoff']
-            df_mape = cv.loc[:, cv.columns != 'cutoff']
-            df_mae = df_mae.fillna(-1).apply(lambda x: mae(x, cv["y"]), axis=0)
-            df_mape = df_mape.fillna(-1).apply(lambda x: mape(x, cv["y"]), axis=0)
-            k_maes_test = df_mae.to_dict()
-            k_mapes_test = df_mape.to_dict()
-            all_mae_test[j] = k_maes_test
-            all_mape_test[j] = k_mapes_test
 
-        folds_mae_test = pd.DataFrame(all_mae_test)
-        folds_mapes_test = pd.DataFrame(all_mape_test)
-        # add for columns + k
-        folds_mae_test.columns = [int(col) + int(k + 1) for col in folds_mae_test.columns]
-        folds_mapes_test.columns = [int(col) + int(k + 1) for col in folds_mapes_test.columns]
-        # merge left
-        folds_mae = folds_mae_train.merge(folds_mae_test, left_index=True, right_index=True, how='left')
-        folds_mapes = folds_mapes_train.merge(folds_mapes_test, left_index=True, right_index=True, how='left')
-        print("folds_mae.columns", folds_mae.columns)
+    df_all = pd.concat(results, ignore_index=True)
 
-        print("folds_mae", folds_mae)
-        print("folds_mapes", folds_mapes)
-        final_results[unique_id] = {}
+    df_all['MAE'] = np.abs(df_all['y'] - df_all['SWA_value'])
+    df_all['MAPE'] = np.abs(df_all['MAE']) / df_all['y']
+    df_all = df_all.sort_values(['unique_id', 'ds', 's', 'w'])
+    # save df_all
+    df_all = df_all[['ds', 'unique_id', 'y', 's', 'w', 'SWA_value', 'MAE', 'MAPE']]
+    # upload to cklickhouse
 
-        final_results[unique_id]['MAE'] = folds_mae.to_dict()
-        final_results[unique_id]['MAPE'] = folds_mapes.to_dict()
-        # plot heatmap for each unique_id
-        # fig, ax = plt.subplots(figsize=(16, 10))
-        # ax.imshow(folds_mae, cmap='viridis', interpolation='nearest')
-        # ax.set_xticks(np.arange(folds_mae.shape[1]))
-        # ax.set_yticks(np.arange(folds_mae.shape[0]))
-        # ax.set_xticklabels(folds_mae.columns)
-        # ax.set_yticklabels(folds_mae.index)
-        # plt.setp(ax.get_xticklabels(), rotation=45, ha="right", rotation_mode="anchor")
-        # plt.show()
+    print("uploading to clickhouse...")
+    client.execute('INSERT INTO  platinum_badim.SWA_results VALUES', df_all.to_dict(orient='records'))
+    df_all.to_csv('SWA_results.csv')
+    pd.set_option('display.max_columns', None)
+    pd.set_option('display.max_rows', None)
 
-# save the results as pickle
-import pickle
+    # find for each unique_id the mean s and w combination in the last year [2023-06-01, 2024-05-31], after that give the best s and w combination for each unique_id
+    start_date_for_check_results = '2023-06-01'
+    df_for_check = df_all[(df_all['ds'] >= start_date_for_check_results) & (df_all['ds'] <= '2024-05-31')].groupby(['unique_id', 's', 'w'])[
+        'MAE'].mean().reset_index().rename(columns={'MAE': 'MAE_mean'})
+    best_w_s = df_for_check.groupby('unique_id')['MAE_mean'].idxmin()
+    best_results = df_for_check.loc[best_w_s]
+    best_w = best_results['w']
+    best_s = best_results['s']
 
-with open('no_gradient_models.pickle', 'wb') as f:
-    pickle.dump(final_results, f)
+
+    print("df_for_check", df_for_check)
+    print("best_results", best_results)
+    print("best_w", best_w)
+    print("best_s", best_s)
+
+
+
+
+
