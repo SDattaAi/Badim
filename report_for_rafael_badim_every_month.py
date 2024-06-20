@@ -9,23 +9,24 @@ password = os.environ['CLICKHOUSE_PASSWORD']
 username = os.environ['CLICKHOUSE_USERNAME']
 port = int(os.environ['CLICKHOUSE_PORT'])
 host = os.environ['CLICKHOUSE_HOST']
-######
-start_date = '2023-05-01'
-end_date = '2024-06-13'
-agg_time_freq = 'M'
+########
+start_date = '2024-04-01'
+end_date = '2024-06-20'
+agg_time_freq = 'W'
 digits_0_2 = []
 digits_2_5 = []
 digits_2_8 = []
-order_status = ['בוצעה', 'שולמה', 'מבוטלת']
+order_status = []
 items = []
-units = ['מטר']
+units = []
 supply_orders_status = ['שוחרר']
-inv_mov_types = ['החזרה מלקוח','חשבוניות מס', 'דאטה מסאפ','משלוחים ללקוח']
+inv_mov_types = ['החזרה מלקוח', 'חשבוניות מס', 'דאטה מסאפ','משלוחים ללקוח']
+sales_or_income = 'income'
 ########
 print(password, username, port, host)
 client = 'badim'
 layer = 'silver'
-# Connection details
+#
 database = f'{layer}_{client}'
 agg_date_update = agg_time_freq
 if agg_time_freq == 'no_agg':
@@ -37,6 +38,7 @@ date_trunc_func = {
     'Q': 'toStartOfQuarter',
     'Y': 'toStartOfYear'
 }.get(agg_date_update, 'toStartOfDay')
+
 def filter_for_query(name_of_column, filter_list):
     if len(filter_list) == 0:
         return ''
@@ -52,7 +54,11 @@ def filter_from_right_item_charachters(filter_list, index_of_first_char, lenght_
         formatted_values = ", ".join([f"'{x}'" if isinstance(x, str) else str(x) for x in filter_list])
         return f"AND SUBSTRING({name_of_column}, {index_of_first_char + 1}, {lenght_of_chars}) IN ({formatted_values})"
 
-
+def sales_or_income_columns_name(sales_or_income):
+    if sales_or_income == 'income':
+        return 'total_price'
+    elif sales_or_income == 'sales':
+        return 'sales'
 
 # Directory containing the SQL scripts
 input_directory = f'/Users/guybasson/PycharmProjects/clickhouse_sql_repo/setup/{client}/generation_tables/{layer}'
@@ -78,27 +84,27 @@ sales_df['year_month'] = pd.to_datetime(sales_df['year_month'])
 sales_df['status_date'] = pd.to_datetime(sales_df['status_date'])
 
 sales_df['sales'] = sales_df['sales'].astype(float)
-sales_df['total_price'] = sales_df['total_price'].astype(float)
+sales_df[sales_or_income_columns_name(sales_or_income)] = sales_df[sales_or_income_columns_name(sales_or_income)].astype(float)
 print(sales_df)
 # show columns in sales_df
 print(sales_df.columns)
 # there is nan in sales column,show it
 print("sales_df[sales_df['sales'].isnull()] ", sales_df[sales_df['sales'].isnull()])
-print("sales_df[sales_df['total_price'].isnull()]", sales_df[sales_df['total_price'].isnull()])
-print("Unique items with null total_price:", sales_df[sales_df['total_price'].isnull()]['item'].unique())
-sales_df['total_price'] = sales_df['total_price'].astype(float)
+print(f"sales_df[sales_df[{sales_or_income_columns_name(sales_or_income)}].isnull()]", sales_df[sales_df[{sales_or_income_columns_name(sales_or_income)}].isnull()])
+print("Unique items with null total_price:", sales_df[sales_df[sales_or_income_columns_name(sales_or_income)].isnull()]['item'].unique())
+sales_df[sales_or_income_columns_name(sales_or_income)] = sales_df[sales_or_income_columns_name(sales_or_income)].astype(float)
 sales_df['sales'] = sales_df['sales'].astype(float)
 ## plot 1 - total income per agg_time_freq - time series
 plt.figure(figsize=(22, 10))  # You can adjust the dimensions as needed reindex to show all days and fill nan with 0
 date_range = pd.date_range(start=sales_df.index.min(), end=sales_df.index.max())
 # Reindex the DataFrame to include all dates in the range
 
-print("1111121234234", sales_df.set_index('status_date')['total_price'].resample(agg_date_update).sum().fillna(0))
+print("1111121234234", sales_df.set_index('status_date')[sales_or_income_columns_name(sales_or_income)].resample(agg_date_update).sum().fillna(0))
 # Plot based on aggregation frequency
 if agg_time_freq == 'D' or agg_time_freq == 'no_agg':
-    sales_df.set_index('status_date')['total_price'].resample('D').sum().fillna(0).plot(kind='line')
+    sales_df.set_index('status_date')[sales_or_income_columns_name(sales_or_income)].resample('D').sum().fillna(0).plot(kind='line')
 else:
-    sales_df.set_index('status_date')['total_price'].resample(agg_time_freq).sum().fillna(0).plot(kind='line')
+    sales_df.set_index('status_date')[sales_or_income_columns_name(sales_or_income)].resample(agg_time_freq).sum().fillna(0).plot(kind='line')
 # make plot 1 data with clickhouse query
 
 
@@ -106,7 +112,7 @@ else:
 
 ################################################# Plot 1 - clickhouse data #################################################
 query_1 = f'''
-    SELECT {date_trunc_func}(toDate(status_date)) as agg_date, sum(total_price) as total_price
+    SELECT {date_trunc_func}(toDate(status_date)) as agg_date, sum({sales_or_income_columns_name(sales_or_income)}) as {sales_or_income_columns_name(sales_or_income)}
     FROM silver_badim.sales
     WHERE toDate(status_date) >= toDate('{start_date}') AND toDate(status_date) <= toDate('{end_date}')
     {filter_for_query('order_status', order_status)}
@@ -118,16 +124,26 @@ query_1 = f'''
     GROUP BY agg_date
     ORDER BY agg_date
 '''
-plot_1_data_clickhouse = client.query_dataframe(query_1).set_index('agg_date')
-# fill missing dates with 0
+
+print("query_1", query_1)
+plot_1_data_clickhouse = client.query_dataframe(query_1).set_index('agg_date').sort_index()
 plot_1_data_clickhouse = plot_1_data_clickhouse.reindex(pd.date_range(start=start_date, end=end_date)).fillna(0).resample(agg_date_update).sum()
+
+# i want if agg_time_freq = 'M' then index will be '2021-01' and not '2021-01-01'
+print("plot_1_data_clickhouse.index", plot_1_data_clickhouse.index)
+if agg_time_freq == 'M':
+    plot_1_data_clickhouse.index = plot_1_data_clickhouse.index.astype(str).str[:7]
+elif agg_time_freq == 'Y':
+    plot_1_data_clickhouse.index = plot_1_data_clickhouse.index.astype(str).str[:4]
+
+print("plot_1_data_clickhouse.index2", plot_1_data_clickhouse.index)
+
+# fill missing dates with 0
 
 print("plot 1 data clickhouse", plot_1_data_clickhouse)
 
 
 
-target_date = pd.to_datetime('2024-04-01')
-plt.axvline(x=target_date, color='r', linestyle='--', label='from sap to priority')
 plt.xticks(rotation=45)
 plt.title('Plot 1 - Total income per agg_time_freq')
 plt.legend()
@@ -142,22 +158,22 @@ plt.show()
 # savle plot 1 to png
 # plot 1.1 - clickhouse data
 # plot 1.2 - clickhouse data
-
 ##############################################################################################################################
 sales_df['status_date'] = pd.to_datetime(sales_df['status_date'])
 # plot 2 - sales per day
 plt.figure(figsize=(22, 10))  # You can adjust the dimensions as needed
 if agg_time_freq == 'D' or agg_time_freq == 'no_agg':
-    sales_df.set_index('status_date')['sales'].resample('D').sum().fillna(0).plot(kind='line')
+    sales_df.set_index('status_date')[sales_or_income_columns_name(sales_or_income)].resample('D').sum().fillna(0).plot(kind='line')
 else:
-    sales_df.set_index('status_date')['sales'].resample(agg_time_freq).sum().fillna(0).plot(kind='line')
-print("plot 2 data", sales_df.set_index('status_date')['sales'].resample(agg_date_update).sum().fillna(0))
+    sales_df.set_index('status_date')[sales_or_income_columns_name(sales_or_income)].resample(agg_time_freq).sum().fillna(0).plot(kind='line')
+print("plot 2 data", sales_df.set_index('status_date')[sales_or_income_columns_name(sales_or_income)].resample(agg_date_update).sum().fillna(0))
 plt.xticks(rotation=45)
 plt.title('Plot 2 - Sales per agg_time_freq')
 plt.legend()
 # save plot 2 to png
 plt.savefig('plot2.png')
 plt.show()
+
 ################################################# Plot 2 - clickhouse data #################################################
 query_2 = f'''
     SELECT {date_trunc_func}(toDate(status_date)) as agg_date, sum(sales) as total_sales
@@ -177,16 +193,21 @@ plot_2_data_clickhouse = client.query_dataframe(query_2).set_index('agg_date')
 # fill missing dates with 0
 plot_2_data_clickhouse = plot_2_data_clickhouse.reindex(pd.date_range(start=start_date, end=end_date)).fillna(0).resample(agg_date_update).sum()
 # plot 2 - clickhouse data
+if agg_time_freq == 'M':
+    plot_2_data_clickhouse.index = plot_2_data_clickhouse.index.astype(str).str[:7]
+elif agg_time_freq == 'Y':
+    plot_2_data_clickhouse.index = plot_2_data_clickhouse.index.astype(str).str[:4]
+
 plt.plot(plot_2_data_clickhouse)
-plt.title('Plot 2.1 - Sales per agg_time_freq clickhouse')
+plt.title(f'Plot 2.1 - {sales_or_income_columns_name(sales_or_income)} per agg_time_freq clickhouse')
 plt.show()
 ##############################################################################################################################
 
 sales_df['status_date'] = pd.to_datetime(sales_df['status_date'])
-top_items = sales_df.groupby('item')['total_price'].sum().nlargest(7).index
+top_items = sales_df.groupby('item')[sales_or_income_columns_name(sales_or_income)].sum().nlargest(7).index
 sales_df_top_10_items = sales_df[sales_df['item'].isin(top_items)]
 #
-pivot_table = sales_df_top_10_items.pivot_table(values='total_price', index='status_date', columns='item', aggfunc='sum')
+pivot_table = sales_df_top_10_items.pivot_table(values=sales_or_income_columns_name(sales_or_income), index='status_date', columns='item', aggfunc='sum')
 #
 # add dates for missing dates and fill nan with 0 from start_date to end_date for each item
 pivot_table = pivot_table.reindex(pd.date_range(start=start_date, end=end_date)).fillna(0).resample(agg_date_update).sum()
@@ -196,11 +217,11 @@ plt.figure(figsize=(13, 10))  # Adjust size as needed
 pivot_table.plot(kind='line', ax=plt.gca())  # Plot all top items with different colors
 plt.xticks(rotation=45)
 plt.legend(title='Item', loc='upper left')  # Customize legend location and title as needed
-plt.title('Plot 3 - Top 10 items with the highest income')  # Add a title to the plot
-plt.axvline(x=target_date, color='r', linestyle='--', label='from sap to priority')
+plt.title(f'Plot 3 - Top 10 items with the highest {sales_or_income_columns_name(sales_or_income)}')  # Add a title to the plot
 # save plot 3 to png
 plt.savefig('plot3.png')
 plt.show()
+
 ################################################# Plot 3 - clickhouse data #################################################
 query_3 = f'''WITH
     '{start_date}' AS start_date,
@@ -238,7 +259,7 @@ query_3 = f'''WITH
 SELECT
     cross_join.status_date,
     cross_join.item,
-    sum(sales.total_price) AS total_price
+    sum(sales.{sales_or_income_columns_name(sales_or_income)}) AS {sales_or_income_columns_name(sales_or_income)}
 FROM
     cross_join
 LEFT JOIN
@@ -261,10 +282,15 @@ ORDER BY
 '''
 plot_3_data_clickhouse = client.query_dataframe(query_3)
 # Pivot the data to get total price per day per item
-plot_3_data_clickhouse = plot_3_data_clickhouse.pivot_table(values='total_price', index='status_date', columns='item', aggfunc='sum')
+plot_3_data_clickhouse = plot_3_data_clickhouse.pivot_table(values=sales_or_income_columns_name(sales_or_income), index='status_date', columns='item', aggfunc='sum')
 # add dates for missing dates and fill nan with 0 from start_date to end_date for each item
 # resample to agg_time_freq
 plot_3_data_clickhouse = plot_3_data_clickhouse.reindex(pd.date_range(start=start_date, end=end_date)).fillna(0).resample(agg_date_update).sum()
+# fill missing dates with 0
+if agg_time_freq == 'M':
+    plot_3_data_clickhouse.index = plot_3_data_clickhouse.index.astype(str).str[:7]
+elif agg_time_freq == 'Y':
+    plot_3_data_clickhouse.index = plot_3_data_clickhouse.index.astype(str).str[:4]
 plot_3_data_clickhouse = plot_3_data_clickhouse.astype(float)
 print("plot 3 data clickhouse", plot_3_data_clickhouse)
 # plot 3 - clickhouse data
@@ -279,13 +305,13 @@ plt.show()
 
 
 # Plot 4 - Top 30 items with the highest sales and others pie chart
-top_items = sales_df.groupby('item')['total_price'].sum().nlargest(10).index
+top_items = sales_df.groupby('item')[sales_or_income_columns_name(sales_or_income)].sum().nlargest(10).index
 sales_df_top_10_items = sales_df[sales_df['item'].isin(top_items)]
-sales_df_top_10_items = sales_df_top_10_items.groupby('item').agg({'total_price': 'sum'})
-sales_df_top_10_items.loc['others'] = sales_df[~sales_df['item'].isin(top_items)]['total_price'].sum()
-sales_df_top_10_items.plot(kind='pie', y='total_price',labels=None, autopct='%1.1f%%', pctdistance=1.15)
+sales_df_top_10_items = sales_df_top_10_items.groupby('item').agg({sales_or_income_columns_name(sales_or_income): 'sum'})
+sales_df_top_10_items.loc['others'] = sales_df[~sales_df['item'].isin(top_items)][sales_or_income_columns_name(sales_or_income)].sum()
+sales_df_top_10_items.plot(kind='pie', y=sales_or_income_columns_name(sales_or_income),labels=None, autopct='%1.1f%%', pctdistance=1.15)
 # print data
-print("plot 4 data", sales_df_top_10_items.sort_values('total_price', ascending=False))
+print("plot 4 data", sales_df_top_10_items.sort_values(sales_or_income_columns_name(sales_or_income), ascending=False))
 plt.title('Plot 4 - Top 10 items with the highest sales and others')
 # save plot 4 to png
 plt.savefig('plot4.png')
@@ -328,11 +354,11 @@ ORDER BY
     total_price DESC'''
 
 plot_4_data_clickhouse = client.query_dataframe(query_4)
-print("plot 4 data clickhouse", plot_4_data_clickhouse.sort_values('total_price', ascending=False))
+print("plot 4 data clickhouse", plot_4_data_clickhouse.sort_values(sales_or_income_columns_name(sales_or_income), ascending=False))
 
 # Plot the pie chart
 plt.figure(figsize=(10, 7))
-plt.pie(plot_4_data_clickhouse['total_price'], labels=plot_4_data_clickhouse['item'], autopct='%1.1f%%')
+plt.pie(plot_4_data_clickhouse[sales_or_income_columns_name(sales_or_income)], labels=plot_4_data_clickhouse['item'], autopct='%1.1f%%')
 plt.title('Plot 4.1 - Top 10 items with the highest sales and others clickhouse')
 # save plot 4 to png
 plt.savefig('plot4.png')
@@ -343,13 +369,13 @@ plt.show()
 
 # Plot 5 - Total sales per day of the week
 # agg sum of total_price per day first do sum per date and then do mean per day of the week
-sales_df_agg_d_s = sales_df.groupby('status_date').agg({'total_price': 'sum'}).reset_index()
+sales_df_agg_d_s = sales_df.groupby('status_date').agg({sales_or_income_columns_name(sales_or_income): 'sum'}).reset_index()
 sales_df_agg_d_s['day_of_week'] = sales_df_agg_d_s['status_date'].dt.dayofweek
 sales_df_agg_d_s['day_of_week'] = sales_df_agg_d_s['day_of_week'].map({0: 'Monday', 1: 'Tuesday', 2: 'Wednesday',
                                                                         3: 'Thursday', 4: 'Friday', 5: 'Saturday',
                                                                         6: 'Sunday'})
 # i want reindex sunday - sat to monday - sunday
-sales_df_agg_w_d = sales_df_agg_d_s.groupby('day_of_week').agg({'total_price': 'mean'}).reindex(
+sales_df_agg_w_d = sales_df_agg_d_s.groupby('day_of_week').agg({sales_or_income_columns_name(sales_or_income): 'mean'}).reindex(
     ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday']).fillna(0)
 print("plot 5 data", sales_df_agg_w_d)
 sales_df_agg_w_d.plot(kind='bar')
@@ -377,8 +403,8 @@ WITH
             {filter_for_query('item', items)}
             {filter_for_query('unit', units)}
             {filter_from_right_item_charachters(digits_0_2, 0, 2)}
-                                         {filter_from_right_item_charachters(digits_2_5, 2, 3)}
-                             {filter_from_right_item_charachters(digits_2_8, 2, 6)}
+            {filter_from_right_item_charachters(digits_2_5, 2, 3)}
+            {filter_from_right_item_charachters(digits_2_8, 2, 6)}
         GROUP BY
             status_date
     ),
@@ -429,9 +455,9 @@ plt.show()
 
 # Plot 6 - Total sales per day of the month
 # agg sum of total_price per day first do sum per date and then do mean per day of the month
-sales_df_agg_d_s = sales_df.groupby('status_date').agg({'total_price': 'sum'}).reset_index()
+sales_df_agg_d_s = sales_df.groupby('status_date').agg({sales_or_income_columns_name(sales_or_income): 'sum'}).reset_index()
 sales_df_agg_d_s['day_of_month'] = sales_df_agg_d_s['status_date'].dt.day
-sales_df_agg_m_d = sales_df_agg_d_s.groupby('day_of_month').agg({'total_price': 'mean'}).fillna(0)
+sales_df_agg_m_d = sales_df_agg_d_s.groupby('day_of_month').agg({sales_or_income_columns_name(sales_or_income): 'mean'}).fillna(0)
 # reindex 1 - 31
 sales_df_agg_m_d = sales_df_agg_m_d.reindex(range(1, 32)).fillna(0)
 print("plot 6 data", sales_df_agg_m_d)
@@ -450,7 +476,7 @@ WITH
     sales_by_date AS (
         SELECT
             status_date AS status_date,
-            SUM(total_price) AS total_price
+            SUM({sales_or_income_columns_name(sales_or_income)}) AS {sales_or_income_columns_name(sales_or_income)}
         FROM
             silver_badim.sales
         WHERE
@@ -459,8 +485,8 @@ WITH
             {filter_for_query('item', items)}
             {filter_for_query('unit', units)}
             {filter_from_right_item_charachters(digits_0_2, 0, 2)}
-                                         {filter_from_right_item_charachters(digits_2_5, 2, 3)}
-                             {filter_from_right_item_charachters(digits_2_8, 2, 6)}
+            {filter_from_right_item_charachters(digits_2_5, 2, 3)}
+            {filter_from_right_item_charachters(digits_2_8, 2, 6)}
         GROUP BY
             status_date
     ),
@@ -492,7 +518,7 @@ plot_6_data_clickhouse = plot_6_data_clickhouse.set_index('day_of_month').sort_i
 plot_6_data_clickhouse = plot_6_data_clickhouse.reindex(range(1, 32)).fillna(0)
 print("plot 6 data clickhouse", plot_6_data_clickhouse)
 # plot
-plt.bar(plot_6_data_clickhouse.index, plot_6_data_clickhouse['avg_total_price'])
+plt.bar(plot_6_data_clickhouse.index, plot_6_data_clickhouse[f'avg_{sales_or_income_columns_name(sales_or_income)}'])
 plt.title('Plot 6.1 - Average income per day of the month clickhouse')
 plt.show()
 
@@ -505,10 +531,10 @@ plt.show()
 # i want month - 1 , month - 2 , month - 3
 # will be just month 1,2,3,4,5,6,7,8,9,10,11,12
 sales_df['month'] = sales_df['status_date'].dt.month
-sales_df_agg_m_s = sales_df.groupby('month').agg({'total_price': 'mean'}).fillna(0)
+sales_df_agg_m_s = sales_df.groupby('month').agg({sales_or_income_columns_name(sales_or_income): 'mean'}).fillna(0)
 print("plot 7 data", sales_df_agg_m_s)
 sales_df_agg_m_s.plot(kind='bar')
-plt.title('plot 7 - average income per month')
+plt.title(f'plot 7 - average {sales_or_income_columns_name(sales_or_income)} per month')
 # save plot 7 to png
 plt.savefig('plot7.png')
 plt.show()
@@ -522,7 +548,7 @@ query_7 = f'''WITH
     sales_by_month AS (
         SELECT
             toMonth(toDate(status_date)) AS month,
-            AVG(total_price) AS avg_total_price
+            AVG({sales_or_income_columns_name(sales_or_income)}) AS avg_{sales_or_income_columns_name(sales_or_income)}
         FROM
             silver_badim.sales
         WHERE
@@ -531,8 +557,8 @@ query_7 = f'''WITH
             {filter_for_query('item', items)}
             {filter_for_query('unit', units)}
             {filter_from_right_item_charachters(digits_0_2, 0, 2)}
-                                         {filter_from_right_item_charachters(digits_2_5, 2, 3)}
-                             {filter_from_right_item_charachters(digits_2_8, 2, 6)}
+            {filter_from_right_item_charachters(digits_2_5, 2, 3)}
+            {filter_from_right_item_charachters(digits_2_8, 2, 6)}
         GROUP BY
             toMonth(toDate(status_date))
     )
@@ -552,8 +578,8 @@ plot_7_data_clickhouse['month'] = plot_7_data_clickhouse['month'].astype(int)
 plot_7_data_clickhouse = plot_7_data_clickhouse.set_index('month').sort_index()
 print("plot 7 data clickhouse", plot_7_data_clickhouse)
 
-plt.bar(plot_7_data_clickhouse.index, plot_7_data_clickhouse['avg_total_price'])
-plt.title('Plot 7.1 - Total income per month clickhouse')
+plt.bar(plot_7_data_clickhouse.index, plot_7_data_clickhouse[f'avg_{sales_or_income_columns_name(sales_or_income)}'])
+plt.title(f'Plot 7.1 - Total {sales_or_income_columns_name(sales_or_income)} per month clickhouse')
 plt.show()
 
 
@@ -579,7 +605,7 @@ sales_df['status_date'] = pd.to_datetime(sales_df['status_date'])
 sales_df['category'] = sales_df['item_desc'].apply(categorize_item_desc)
 
 # Pivot the data to get total price per day per category
-pivot_df = sales_df.pivot_table(index='status_date', columns='category', values='total_price', aggfunc='sum', fill_value=0)
+pivot_df = sales_df.pivot_table(index='status_date', columns='category', values=sales_or_income_columns_name(sales_or_income), aggfunc='sum', fill_value=0)
 
 # Resample to fill in missing dates and frequency
 pivot_df = pivot_df.resample(agg_date_update).sum()
@@ -627,8 +653,8 @@ WITH
             {filter_for_query('item', items)}
             {filter_for_query('unit', units)}
             {filter_from_right_item_charachters(digits_0_2, 0, 2)}
-                                         {filter_from_right_item_charachters(digits_2_5, 2, 3)}
-                             {filter_from_right_item_charachters(digits_2_8, 2, 6)}
+            {filter_from_right_item_charachters(digits_2_5, 2, 3)}
+            {filter_from_right_item_charachters(digits_2_8, 2, 6)}
     ),
 
     -- Aggregate total price per day per category
@@ -665,7 +691,10 @@ plot_8_data_clickhouse = plot_8_data_clickhouse.set_index('date').reindex(pd.dat
 plot_8_data_clickhouse = plot_8_data_clickhouse.rename(columns={'only_leather': 'רק עור', 'only_fabric': 'רק בד',
                                                                 'leather_and_fabric': 'בד וגם עור',
                                                                 'neither_leather_nor_fabric': 'לא בד ולא עור'})
-
+if agg_time_freq == 'M':
+    plot_8_data_clickhouse.index = plot_8_data_clickhouse.index.astype(str).str[:7]
+elif agg_time_freq == 'Y':
+    plot_8_data_clickhouse.index = plot_8_data_clickhouse.index.astype(str).str[:4]
 print("plot 8 data clickhouse", plot_8_data_clickhouse)
 
 # plot
@@ -723,7 +752,7 @@ colors = ['blue', 'brown', 'red', 'green', 'yellow', 'black', 'white', 'gray', '
 sales_df['color'] = sales_df['item_desc'].apply(categorize_item_color)
 
 # Create a pivot table to aggregate total prices by date and color
-pivot_df = sales_df.pivot_table(index='status_date', columns='color', values='total_price', aggfunc='sum', fill_value=0)
+pivot_df = sales_df.pivot_table(index='status_date', columns='color', values=sales_or_income_columns_name(sales_or_income), aggfunc='sum', fill_value=0)
 
 # Resample the pivot table to the desired frequency
 pivot_df = pivot_df.resample(agg_date_update).sum()
@@ -788,8 +817,8 @@ query_9 = f"""WITH
             {filter_for_query('item', items)}
             {filter_for_query('unit', units)}
             {filter_from_right_item_charachters(digits_0_2, 0, 2)}
-                                         {filter_from_right_item_charachters(digits_2_5, 2, 3)}
-                             {filter_from_right_item_charachters(digits_2_8, 2, 6)}
+            {filter_from_right_item_charachters(digits_2_5, 2, 3)}
+            {filter_from_right_item_charachters(digits_2_8, 2, 6)}
     ),
 
     -- Aggregate total price per day per color
@@ -829,6 +858,10 @@ plot_9_data_clickhouse = plot_9_data_clickhouse.set_index('status_date').astype(
 # fill missing dates with 0
 plot_9_data_clickhouse = plot_9_data_clickhouse.reindex(pd.date_range(start=start_date, end=end_date)).fillna(0)
 plot_9_data_clickhouse = plot_9_data_clickhouse.resample(agg_date_update).sum()
+if agg_time_freq == 'M':
+    plot_9_data_clickhouse.index = plot_9_data_clickhouse.index.astype(str).str[:7]
+elif agg_time_freq == 'Y':
+    plot_9_data_clickhouse.index = plot_9_data_clickhouse.index.astype(str).str[:4]
 print("plot 9 data clickhouse", plot_9_data_clickhouse)
 # plot
 fig, ax = plt.subplots()
@@ -872,14 +905,14 @@ colors = ['blue', 'brown', 'red', 'green', 'yellow', 'black', 'white', 'gray', '
 # add label to pie chart
 colors_pie = {'blue': 'blue', 'brown': 'brown', 'red': 'red', 'green': 'green', 'yellow': 'yellow', 'black': 'black',
               'white': 'white', 'gray': 'gray', 'more then 1 color': 'purple', 'other': 'pink'}
-sum_of_total_price_per_color = sales_df.groupby('color').agg({'total_price': 'sum'}).reset_index()
+sum_of_total_price_per_color = sales_df.groupby('color').agg({sales_or_income_columns_name(sales_or_income): 'sum'}).reset_index()
 
 # Custom colors
 custom_colors = [colors_pie[color] for color in sum_of_total_price_per_color['color']]
 
 # Plot
 plt.figure(figsize=(10, 7))
-plt.pie(sum_of_total_price_per_color['total_price'], labels=sum_of_total_price_per_color['color'], colors=custom_colors, autopct='%1.1f%%')
+plt.pie(sum_of_total_price_per_color[sales_or_income_columns_name(sales_or_income)], labels=sum_of_total_price_per_color['color'], colors=custom_colors, autopct='%1.1f%%')
 print( "plot 10 data", sum_of_total_price_per_color)
 plt.title('Plot 10 - Total Price by Color')
 # save plot 10 to png
@@ -975,8 +1008,8 @@ query_10 = f"""WITH
             {filter_for_query('item', items)}
             {filter_for_query('unit', units)}
             {filter_from_right_item_charachters(digits_0_2, 0, 2)}
-                                         {filter_from_right_item_charachters(digits_2_5, 2, 3)}
-                             {filter_from_right_item_charachters(digits_2_8, 2, 6)}
+            {filter_from_right_item_charachters(digits_2_5, 2, 3)}
+            {filter_from_right_item_charachters(digits_2_8, 2, 6)}
         GROUP BY
             color
     )
@@ -1001,7 +1034,7 @@ print("plot 10 data clickhouse", plot_10_data_clickhouse)
 custom_colors = [colors_pie[color] for color in sum_of_total_price_per_color['color']]
 # Plot
 plt.figure(figsize=(10, 7))
-plt.pie(plot_10_data_clickhouse['total_price'], labels=plot_10_data_clickhouse['color'], colors=custom_colors, autopct='%1.1f%%')
+plt.pie(plot_10_data_clickhouse[sales_or_income_columns_name(sales_or_income)], labels=plot_10_data_clickhouse['color'], colors=custom_colors, autopct='%1.1f%%')
 plt.title('Plot 10.1 - Total Price by Color clickhouse')
 # save plot 10 to png
 plt.show()
@@ -1010,7 +1043,7 @@ plt.show()
 ##############################################################################################################################
 
 # Plot 11 - scatter plot of sales and total_price tick will be 0.1 log scale
-sales_df11 = sales_df[['sales', 'total_price', 'status_date']].groupby('status_date').sum().reset_index()
+sales_df11 = sales_df[['sales', sales_or_income_columns_name(sales_or_income), 'status_date']].groupby('status_date').sum().reset_index()
 # fill missing dates with 0
 sales_df11 = sales_df11.set_index('status_date').reindex(pd.date_range(start=start_date, end=end_date)).fillna(0).resample(agg_date_update).sum()
 # resample the data
@@ -1038,8 +1071,8 @@ WHERE
     {filter_for_query('item', items)}
     {filter_for_query('unit', units)}
     {filter_from_right_item_charachters(digits_0_2, 0, 2)}
-                                 {filter_from_right_item_charachters(digits_2_5, 2, 3)}
-                             {filter_from_right_item_charachters(digits_2_8, 2, 6)}
+    {filter_from_right_item_charachters(digits_2_5, 2, 3)}
+    {filter_from_right_item_charachters(digits_2_8, 2, 6)}
 GROUP BY
     date
 ORDER BY
@@ -1127,7 +1160,7 @@ plt.show()
 ##############################################################################################################################
 supply_orders_df['date'] = pd.to_datetime(supply_orders_df['date'])
 supply_orders_df = supply_orders_df.rename(columns={'date': 'status_date'})
-sales_df_agg_d_s = sales_df.groupby('status_date').agg({'total_price': 'sum'}).reset_index()
+sales_df_agg_d_s = sales_df.groupby('status_date').agg({sales_or_income_columns_name(sales_or_income): 'sum'}).reset_index()
 supply_orders_df_agg_d_s = supply_orders_df.groupby('status_date').agg({'total_expense_ILS': 'sum'}).reset_index()
 supply_orders_df_agg_d_s = supply_orders_df_agg_d_s[supply_orders_df_agg_d_s['status_date'] >= '2024-04-01']
 print("supply_orders_df_agg_d_s", supply_orders_df_agg_d_s)
@@ -1146,7 +1179,6 @@ plt.figure(figsize=(14, 7))
 plt.plot(merged_df['status_date'], merged_df['total_price'], label='Total Price (Sales)', color='blue')
 plt.plot(merged_df['status_date'], merged_df['total_expense_ILS'], label='Total Price (Supply Orders)', color='red')
 plt.plot(merged_df['status_date'], merged_df['diff'], label='Difference(income-expense)', color='green')
-plt.axvline(x=target_date, color='r', linestyle='--', label='from sap to priority')
 plt.xticks(rotation=45)
 plt.title('Plot 13 - Total Price (Sales) vs Total Price (Supply Orders) per Date')
 plt.legend()
@@ -1169,8 +1201,8 @@ query_13 = f"""WITH
             {filter_for_query('item', items)}
             {filter_for_query('unit', units)}
             {filter_from_right_item_charachters(digits_0_2, 0, 2)}
-                                         {filter_from_right_item_charachters(digits_2_5, 2, 3)}
-                             {filter_from_right_item_charachters(digits_2_8, 2, 6)}
+            {filter_from_right_item_charachters(digits_2_5, 2, 3)}
+            {filter_from_right_item_charachters(digits_2_8, 2, 6)}
         GROUP BY
             status_date
     ),
@@ -1242,7 +1274,6 @@ plt.figure(figsize=(14, 7))
 plt.plot(plot_13_data_clickhouse['status_date'], plot_13_data_clickhouse['total_price'], label='Total Price (Sales)', color='blue')
 plt.plot(plot_13_data_clickhouse['status_date'], plot_13_data_clickhouse['total_expense_ILS'], label='Total Price (Supply Orders)', color='red')
 plt.plot(plot_13_data_clickhouse['status_date'], plot_13_data_clickhouse['diff'], label='Difference(income-expense)', color='green')
-plt.axvline(x=target_date, color='r', linestyle='--', label='from sap to priority')
 plt.xticks(rotation=45)
 plt.title('Plot 13.1 - Total Price (Sales) vs Total Price (Supply Orders) per Date clickhouse')
 plt.legend()
@@ -1319,7 +1350,6 @@ ON
     o.cust_id = c.cust_id
 WHERE 
     o.status_date >= '{start_date}' AND o.status_date <= '{end_date}'
-    {filter_for_query('o.order_status', order_status)}
 GROUP BY 
     cust_country
 ORDER BY 
@@ -1431,6 +1461,11 @@ query_17 = f'''
     FROM silver_badim.sales
     WHERE toDate(status_date) >= toDate('{start_date}') AND toDate(status_date) <= toDate('{end_date}')
     {filter_for_query('order_status', order_status)}
+    {filter_for_query('item', items)}
+    {filter_for_query('unit', units)}
+    {filter_from_right_item_charachters(digits_0_2, 0, 2)}
+    {filter_from_right_item_charachters(digits_2_5, 2, 3)}
+    {filter_from_right_item_charachters(digits_2_8, 2, 6)}
     GROUP BY status_date
     ORDER BY status_date
 '''
@@ -1468,6 +1503,11 @@ query_18 = f'''
     FROM silver_badim.sales
     WHERE toDate(status_date) >= toDate('{start_date}') AND toDate(status_date) <= toDate('{end_date}')
     {filter_for_query('order_status', order_status)}
+    {filter_for_query('item', items)}
+    {filter_for_query('unit', units)}
+    {filter_from_right_item_charachters(digits_0_2, 0, 2)}
+    {filter_from_right_item_charachters(digits_2_5, 2, 3)}
+    {filter_from_right_item_charachters(digits_2_8, 2, 6)}
     GROUP BY status_date
     ORDER BY status_date
 '''
@@ -1493,8 +1533,8 @@ WHERE
     {filter_for_query('unit', units)}
     {filter_for_query('inv_mov_type', inv_mov_types)}
     {filter_from_right_item_charachters(digits_0_2, 0, 2)}
-                                 {filter_from_right_item_charachters(digits_2_5, 2, 3)}
-                             {filter_from_right_item_charachters(digits_2_8, 2, 6)}
+    {filter_from_right_item_charachters(digits_2_5, 2, 3)}
+    {filter_from_right_item_charachters(digits_2_8, 2, 6)}
 GROUP BY    
     agg_date    
 ORDER BY

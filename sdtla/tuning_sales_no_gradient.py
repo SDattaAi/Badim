@@ -39,7 +39,7 @@ if __name__ == "__main__":
     # Connect to ClickHouse
     client = clickhouse_driver.Client(host=host, user=username, password=password, port=port, secure=True)
 
-    query = f'''SELECT * FROM {database}.stock_log
+    query = f'''SELECT cur_date,quantity,item FROM {database}.stock_log
                                       where toDate(cur_date) >= '{start_date}' and toDate(cur_date) <= '{end_date}'
                                         {filter_for_query('inv_mov_type', inv_mov_types)}
                                         {filter_for_query('item', items)}
@@ -127,6 +127,7 @@ if __name__ == "__main__":
 
     print("uploading to clickhouse...")
     client.execute('INSERT INTO  platinum_badim.SWA_results VALUES', df_all.to_dict(orient='records'))
+    print("save to csv")
     df_all.to_csv('SWA_results.csv')
     pd.set_option('display.max_columns', None)
     pd.set_option('display.max_rows', None)
