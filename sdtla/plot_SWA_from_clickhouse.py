@@ -10,7 +10,7 @@ from matplotlib.lines import Line2D
 start_date_for_check_results = '2023-06-01'
 end_date_for_check_results = '2024-05-31'
 unique_ids = ['20009902', '20005904', '20024900', '20064111']
-number_of_months_to_predict = 3
+number_of_months_to_predict = 5
 metric = 'MAE'
 ###############
 
@@ -19,7 +19,7 @@ month_to_predict = pd.to_datetime(end_date_for_check_results).strftime('%Y-%m')
 month_to_predict = (pd.to_datetime(month_to_predict) + pd.DateOffset(months=number_of_months_to_predict)).strftime('%Y-%m')
 print("month_to_predict:", month_to_predict)
 end_month_to_predict = (pd.to_datetime(month_to_predict) + pd.DateOffset(months=1) - pd.DateOffset(days=1)).strftime('%Y-%m-%d')
-
+print("end_month_to_predict:", end_month_to_predict)
 
 password = os.environ['CLICKHOUSE_PASSWORD']
 username = os.environ['CLICKHOUSE_USERNAME']
@@ -33,8 +33,7 @@ df = client.query_dataframe(f'''SELECT * FROM platinum_badim.SWA_results
                                 'start_date_for_check_results': start_date_for_check_results,
                                 'end_month_to_predict': end_month_to_predict})
 df['ds'] = pd.to_datetime(df['ds'])
-end_of_month_to_predict = pd.to_datetime(month_to_predict) + pd.DateOffset(months=1) - pd.DateOffset(days=1)
-end_of_month_to_predict = end_of_month_to_predict.strftime('%Y-%m-%d')
+print("max date from df", df['ds'].max()   )
 # Assuming unique_ids, best_w, best_s, and start_date_for_check_results are already defined
 colors = list(mcolors.TABLEAU_COLORS.keys())  # Get a list of colors from matplotlib's color palette
 color_map = {unique_id: colors[i % len(colors)] for i, unique_id in enumerate(unique_ids)}  # Map unique_id to colors
@@ -44,11 +43,12 @@ line_style_legend = [Line2D([0], [0], color='black', linestyle='-', label='Actua
 plt.figure(figsize=(15, 7))
 final_ds_to_plot = pd.DataFrame()
 for unique_id in unique_ids:
-    df_unique_id_for_check = df[(pd.to_datetime(df['ds']) >= start_date_for_check_results) & (pd.to_datetime(df['ds']) <= month_to_predict) & (df['unique_id'] == unique_id)]
+    df_unique_id_for_check = df[(pd.to_datetime(df['ds']) >= start_date_for_check_results) & (pd.to_datetime(df['ds']) <= end_month_to_predict) & (df['unique_id'] == unique_id)]
     print("unique_id", unique_id)
-    df_unique_id_for_check_with_end_date = df_unique_id_for_check[df_unique_id_for_check['ds'] == month_to_predict]
-
-    w_s_list_to_delete = df_unique_id_for_check_with_end_date[df_unique_id_for_check_with_end_date[metric].isnull()][['w', 's']].values
+    df_unique_id_for_check_with_end_date = df_unique_id_for_check[df_unique_id_for_check['ds'] == end_month_to_predict]
+    print("max date", pd.to_datetime(df_unique_id_for_check['ds']).max())
+    w_s_list_to_delete = df_unique_id_for_check_with_end_date[df_unique_id_for_check_with_end_date['SWA_value'].isnull()][['w', 's']].values
+    print("w_s_list_to_delete", w_s_list_to_delete)
     for w_s in w_s_list_to_delete:
         df_unique_id_for_check = df_unique_id_for_check[(df_unique_id_for_check['w'] != w_s[0]) | (df_unique_id_for_check['s'] != w_s[1])]
     df_unique_id_for_check_g = df_unique_id_for_check.groupby(['w', 's']).agg({metric: 'mean'}).reset_index().rename(columns={metric: f'{metric}_mean'})
@@ -72,7 +72,9 @@ final_ds_to_plot_y = final_ds_to_plot.pivot_table(index='ds', columns='unique_id
 # Get the list of colors corresponding to the columns in the DataFrame
 colors_swa = [color_map[col] for col in final_ds_to_plot_swa.columns]
 colors_y = [color_map[col] for col in final_ds_to_plot_y.columns]
-
+# add to final_ds_to_plot_y the index of final_ds_to_plot_swa
+final_ds_to_plot_y = final_ds_to_plot_y.reindex(final_ds_to_plot_swa.index)
+print("final_ds_to_plot_y", final_ds_to_plot_y)
 # Plotting
 fig, ax = plt.subplots(figsize=(15, 7))
 
@@ -81,7 +83,7 @@ final_ds_to_plot_swa.plot(ax=ax, color=colors_swa, linestyle='--')
 
 # Plot y values with dashed lines
 final_ds_to_plot_y.plot(ax=ax, color=colors_y, linestyle='-')
-
+# x tick labels as
 # Adding legend
 ax.legend()
 plt.title('SWA values and y values, metric: ' + metric)
