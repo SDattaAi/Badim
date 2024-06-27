@@ -6,12 +6,19 @@ import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.lines import Line2D
 
-
+###### inputs ######
 start_date_for_check_results = '2023-06-01'
 end_date_for_check_results = '2024-05-31'
 unique_ids = ['20009902', '20005904', '20024900', '20064111']
-month_to_predict = '2024-06'
+number_of_months_to_predict = 2
+metric = 'MAPE'
+###############
 
+# Step 1: Calculate month_to_predict
+month_to_predict = pd.to_datetime(end_date_for_check_results).strftime('%Y-%m')
+month_to_predict = (pd.to_datetime(month_to_predict) + pd.DateOffset(months=number_of_months_to_predict)).strftime('%Y-%m')
+print("month_to_predict:", month_to_predict)
+end_month_to_predict = (pd.to_datetime(month_to_predict) + pd.DateOffset(months=1) - pd.DateOffset(days=1)).strftime('%Y-%m-%d')
 
 
 password = os.environ['CLICKHOUSE_PASSWORD']
@@ -20,9 +27,11 @@ port = int(os.environ['CLICKHOUSE_PORT'])
 host = os.environ['CLICKHOUSE_HOST']
 
 client = clickhouse_driver.Client(host=host, user=username, password=password, port=port, secure=True)
-unique_ids_format = ', '.join([f"'{unique_id}'" for unique_id in unique_ids])
-df = client.query_dataframe('SELECT * FROM platinum_badim.SWA_results'
-                            ' where unique_id in ({})'.format(unique_ids_format))
+df = client.query_dataframe(f'''SELECT * FROM platinum_badim.SWA_results
+                            WHERE toDate(ds) >= %(start_date_for_check_results)s AND toDate(ds) <= %(end_month_to_predict)s 
+                            AND unique_id in (%(unique_ids)s)''', {'unique_ids': unique_ids,
+                                'start_date_for_check_results': start_date_for_check_results,
+                                'end_month_to_predict': end_month_to_predict})
 df['ds'] = pd.to_datetime(df['ds'])
 end_of_month_to_predict = pd.to_datetime(month_to_predict) + pd.DateOffset(months=1) - pd.DateOffset(days=1)
 end_of_month_to_predict = end_of_month_to_predict.strftime('%Y-%m-%d')
@@ -33,36 +42,49 @@ line_style_legend = [Line2D([0], [0], color='black', linestyle='-', label='Actua
                      Line2D([0], [0], color='black', linestyle='--', label='Best Model')]
 
 plt.figure(figsize=(15, 7))
-
+final_ds_to_plot = pd.DataFrame()
 for unique_id in unique_ids:
-    df_unique_id_for_check = df[(df['ds'] >= start_date_for_check_results) & (df['ds'] <= end_date_for_check_results) & (df['unique_id'] == unique_id)].groupby(
-        ['s', 'w'])[
-        'MAE'].mean().reset_index().rename(columns={'MAE': 'MAE_mean'})
-    best_w_s = df_unique_id_for_check['MAE_mean'].idxmin()
-    best_results = df_unique_id_for_check.iloc[best_w_s]
+    df_unique_id_for_check = df[(pd.to_datetime(df['ds']) >= start_date_for_check_results) & (pd.to_datetime(df['ds']) <= month_to_predict) & (df['unique_id'] == unique_id)]
+    print("unique_id", unique_id)
+    df_unique_id_for_check_with_end_date = df_unique_id_for_check[df_unique_id_for_check['ds'] == month_to_predict]
+
+    w_s_list_to_delete = df_unique_id_for_check_with_end_date[df_unique_id_for_check_with_end_date[metric].isnull()][['w', 's']].values
+    for w_s in w_s_list_to_delete:
+        df_unique_id_for_check = df_unique_id_for_check[(df_unique_id_for_check['w'] != w_s[0]) | (df_unique_id_for_check['s'] != w_s[1])]
+    df_unique_id_for_check_g = df_unique_id_for_check.groupby(['w', 's']).agg({metric: 'mean'}).reset_index().rename(columns={metric: f'{metric}_mean'})
+    best_w_s = df_unique_id_for_check_g[f'{metric}_mean'].idxmin()
+    if pd.isnull(best_w_s):
+        print("no best model for unique_id", unique_id)
+        continue
+    best_results = df_unique_id_for_check_g.iloc[best_w_s]
     best_w = int(best_results['w'])
     best_s = int(best_results['s'])
     best_result = df[(df['w'] == best_w) & (df['s'] == best_s) & (df['unique_id'] == unique_id) & (
-                df['ds'] >= start_date_for_check_results) & (df['ds'] <= end_of_month_to_predict)].sort_values('ds')
+            pd.to_datetime( df['ds']) >= start_date_for_check_results) & (pd.to_datetime(df['ds']) <= month_to_predict)].sort_values('ds')
+    best_result['ds'] = best_result['ds'].astype(str).str[:7]
     color = color_map[unique_id]
-    plt.plot(best_result['ds'], best_result['y'], label=f'Actual: {unique_id}', linestyle='-', color=color)
-    plt.plot(best_result['ds'], best_result['SWA_value'], label=f'Best Model for: {unique_id}', linestyle='--', color=color)
-    print(f"prediction of best model in {month_to_predict} of unique_id", unique_id, "is", np.round(df[(df['ds'].astype(str).str[:7] == month_to_predict) & (df['unique_id'] == unique_id)]['SWA_value'].values[0], 2), 'best_w:', best_w, 'best_s:', best_s)
+    final_ds_to_plot = pd.concat([final_ds_to_plot, best_result])
+# i want plot final_ds_to_plot with pivot table with color_map
+plt.figure(figsize=(15, 7))
 
+final_ds_to_plot_swa = final_ds_to_plot.pivot_table(index='ds', columns='unique_id', values='SWA_value', aggfunc='first')
+final_ds_to_plot_y = final_ds_to_plot.pivot_table(index='ds', columns='unique_id', values='y', aggfunc='first')
+# Get the list of colors corresponding to the columns in the DataFrame
+colors_swa = [color_map[col] for col in final_ds_to_plot_swa.columns]
+colors_y = [color_map[col] for col in final_ds_to_plot_y.columns]
 
-# Add the legend for unique IDs with different colors
-unique_id_legend = [Line2D([0], [0], color=color_map[unique_id], lw=2, label=f'Unique_id: {unique_id}')
-                    for unique_id in unique_ids]
-unique_id_legend = plt.legend(handles=unique_id_legend, loc='center left', bbox_to_anchor=(1, 0.5))
-plt.gca().add_artist(unique_id_legend)
+# Plotting
+fig, ax = plt.subplots(figsize=(15, 7))
 
-# Add the legend for the line styles
-plt.legend(handles=line_style_legend, loc='upper left', bbox_to_anchor=(1, 1))
-plt.title('Actual vs Best Model')
-plt.xlabel('Date')
-plt.ylabel('Sales')
-plt.tight_layout()
-# save the plot
-plt.savefig('SWA_results_example.png')
-# Show the plot
+# Plot SWA values
+final_ds_to_plot_swa.plot(ax=ax, color=colors_swa)
+
+# Plot y values with dashed lines
+final_ds_to_plot_y.plot(ax=ax, color=colors_y, linestyle='--')
+
+# Adding legend
+ax.legend()
+plt.title('SWA values and y values, metric: ' + metric)
+
+# Show plot
 plt.show()
