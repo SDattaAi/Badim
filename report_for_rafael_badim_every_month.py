@@ -238,7 +238,7 @@ query_3 = f'''WITH
     top_items AS (
         SELECT item
         FROM silver_badim.sales
-        WHERE status_date >= start_date AND status_date <= end_date
+        WHERE toDate(status_date) >= toDate(start_date) AND toDate(status_date) <= toDate(end_date)
     {filter_for_query('order_status', order_status)}
     {filter_for_query('unit', units)}
     {item_cataegory_catalog_or_color_query(type_of_filter, list_of_type)}
@@ -268,7 +268,7 @@ SELECT
 FROM
     cross_join
 LEFT JOIN
-    (SELECT status_date, item, {sales_or_income_columns_name(sales_or_income)} FROM silver_badim.sales WHERE status_date >= start_date AND status_date <= end_date
+    (SELECT status_date, item, {sales_or_income_columns_name(sales_or_income)} FROM silver_badim.sales WHERE toDate(status_date) >= toDate(start_date) AND toDate(status_date) <= toDate(end_date)
     {filter_for_query('order_status', order_status)}
     {filter_for_query('unit', units)}
     {item_cataegory_catalog_or_color_query(type_of_filter, list_of_type)}
@@ -327,7 +327,7 @@ query_4 = f'''WITH
     top_items AS (
         SELECT item
         FROM silver_badim.sales
-        WHERE status_date >= start_date AND status_date <= end_date
+        WHERE toDate(status_date) >= toDate(start_date) AND toDate(status_date) <= toDate(end_date)
         {filter_for_query('order_status', order_status)}
         {filter_for_query('unit', units)}
         {item_cataegory_catalog_or_color_query(type_of_filter, list_of_type)}
@@ -342,7 +342,7 @@ SELECT
 FROM 
     silver_badim.sales
 WHERE 
-    status_date >= start_date AND status_date <= end_date
+    toDate(status_date) >= toDate(start_date) AND toDate(status_date) <= toDate(end_date)
     {filter_for_query('order_status', order_status)}
     {filter_for_query('unit', units)}
     {item_cataegory_catalog_or_color_query(type_of_filter, list_of_type)}
@@ -395,7 +395,7 @@ WITH
         FROM
             silver_badim.sales
         WHERE
-            status_date >= start_date AND status_date <= end_date
+            toDate(status_date) >= toDate(start_date) AND toDate(status_date) <= toDate(end_date)
             {filter_for_query('order_status', order_status)}
             {item_cataegory_catalog_or_color_query(type_of_filter, list_of_type)}
         GROUP BY
