@@ -213,4 +213,14 @@ print(df)
 # plot the data
 plt.plot(df['agg_date'], df['unique_customers'])
 plt.show()
-
+order_status = []
+query = f'''
+    SELECT sum(total_price) as Total_income
+    FROM silver_badim.sales
+    WHERE toDate(status_date) >= toDate(%(start_date)s) AND toDate(status_date) <= toDate(%(end_date)s)
+    {filter_for_query('order_status', order_status)}
+    {filter_for_query('unit', units)}
+    {item_cataegory_catalog_or_color_query(type_of_filter, list_of_type)}
+'''
+df = client.execute(query, params=params)
+print(df)

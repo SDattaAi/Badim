@@ -10,8 +10,8 @@ from matplotlib.lines import Line2D
 start_date_for_check_results = '2023-06-01'
 end_date_for_check_results = '2024-05-31'
 unique_ids = ['20009902', '20005904', '20024900', '20064111']
-number_of_months_to_predict = 2
-metric = 'MAPE'
+number_of_months_to_predict = 3
+metric = 'MAE'
 ###############
 
 # Step 1: Calculate month_to_predict
@@ -66,7 +66,7 @@ for unique_id in unique_ids:
     final_ds_to_plot = pd.concat([final_ds_to_plot, best_result])
 # i want plot final_ds_to_plot with pivot table with color_map
 plt.figure(figsize=(15, 7))
-
+print("final_ds_to_plot", final_ds_to_plot)
 final_ds_to_plot_swa = final_ds_to_plot.pivot_table(index='ds', columns='unique_id', values='SWA_value', aggfunc='first')
 final_ds_to_plot_y = final_ds_to_plot.pivot_table(index='ds', columns='unique_id', values='y', aggfunc='first')
 # Get the list of colors corresponding to the columns in the DataFrame
@@ -77,10 +77,10 @@ colors_y = [color_map[col] for col in final_ds_to_plot_y.columns]
 fig, ax = plt.subplots(figsize=(15, 7))
 
 # Plot SWA values
-final_ds_to_plot_swa.plot(ax=ax, color=colors_swa)
+final_ds_to_plot_swa.plot(ax=ax, color=colors_swa, linestyle='--')
 
 # Plot y values with dashed lines
-final_ds_to_plot_y.plot(ax=ax, color=colors_y, linestyle='--')
+final_ds_to_plot_y.plot(ax=ax, color=colors_y, linestyle='-')
 
 # Adding legend
 ax.legend()
