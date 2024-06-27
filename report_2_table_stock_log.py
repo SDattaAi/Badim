@@ -21,7 +21,7 @@ units = []
 status_supply_orders = ['שוחרר']
 status_regular_orders = ['בוצעה','שולמה']
 client = clickhouse_driver.Client(host=host, user=username, password=password, port=port, secure=True)
-
+params = {'start_date': start_date, 'end_date': end_date}
 #%%
 def filter_for_query(name_of_column, filter_list):
     if len(filter_list) == 0:
@@ -70,7 +70,7 @@ WITH
             sum(quantity) as total_quantity
         FROM
             silver_badim.stock_log
-        WHERE toDate(update_date) >= toDate('{start_date}') AND toDate(update_date) <= toDate('{end_date}')
+        WHERE toDate(update_date) >= toDate(%(start_date)s) AND toDate(update_date) <= toDate(%(end_date)s)
     {filter_for_query('unit', units)}
     {item_cataegory_catalog_or_color_query(type_of_filter, list_of_type)}
             AND inv_mov_type in ('משלוחים ללקוח', 'חשבוניות מס', 'חשבוניות מס קבלה', 'דאטה מסאפ')
@@ -83,7 +83,7 @@ WITH
             sum(quantity) as total_quantity
         FROM
             silver_badim.stock_log
-               WHERE toDate(update_date) >= toDate('{start_date}') AND toDate(update_date) <= toDate('{end_date}')
+               WHERE toDate(update_date) >= toDate(%(start_date)s) AND toDate(update_date) <= toDate(%(end_date)s)
     {item_cataegory_catalog_or_color_query(type_of_filter, list_of_type) }
     {filter_for_query('unit', units)}
 
@@ -103,7 +103,7 @@ ORDER BY
 
 '''
 print(query)
-df = client.query_dataframe(query)
+df = client.query_dataframe(query, params=params)
 df['agg_date'] = pd.to_datetime(df['agg_date'])
 # fill missing dates with 0
 df = df.set_index('agg_date').resample(agg_time_freq).sum().fillna(0).reset_index()
@@ -121,7 +121,7 @@ SELECT
     sum(total_price_ILS) as total_price_ILS
 FROM
     silver_badim.supply_orders
-WHERE toDate(date) >= toDate('{start_date}') AND toDate(date) <= toDate('{end_date}')
+WHERE toDate(date) >= toDate(%(start_date)s) AND toDate(date) <= toDate(%(end_date)s)
 {filter_for_query('status', status_supply_orders)}
 
 GROUP BY
@@ -129,7 +129,7 @@ GROUP BY
 ORDER BY
     total_price_ILS DESC;
 '''
-df = client.query_dataframe(query)
+df = client.query_dataframe(query, params=params)
 print(df)
 # plot Pie chart
 plt.pie(df['total_price_ILS'], labels=df['supply_name'], autopct='%1.1f%%')
@@ -143,7 +143,7 @@ SELECT
 FROM
     silver_badim.supply_orders
         
-WHERE toDate(date) >= toDate('{start_date}') AND toDate(date) <= toDate('{end_date}')
+WHERE toDate(date) >= toDate(%(start_date)s) AND toDate(date) <= toDate(%(end_date)s)
 {filter_for_query('status', status_supply_orders)}
 
 GROUP BY
@@ -152,7 +152,7 @@ ORDER BY
     agg_date;
 '''
 print(query)
-df = client.query_dataframe(query)
+df = client.query_dataframe(query, params=params)
 df['agg_date'] = pd.to_datetime(df['agg_date'])
 # fill missing dates with 0
 df = df.set_index('agg_date').resample(agg_time_freq).sum().fillna(0).reset_index()
@@ -166,11 +166,11 @@ query = f'''
 SELECT     c.state AS cust_city,    
  SUM(CAST(o.total_price_with_discount AS Float64)) AS total_price_with_discount
  FROM     silver_badim.orders o LEFT JOIN     silver_badim.customers c ON  
-    o.cust_id = c.cust_id WHERE     o.status_date >= '{start_date}' 
-    AND o.status_date <= '{end_date}'   
+    o.cust_id = c.cust_id WHERE     o.status_date >= %(start_date)s 
+    AND o.status_date <= %(end_date)s   
      {filter_for_query('o.order_status', status_regular_orders)}
       GROUP BY     cust_city ORDER BY     total_price_with_discount DESC;'''
-df = client.query_dataframe(query)
+df = client.query_dataframe(query, params=params)
 # i want labels [::-1] to reverse the order
 labels =  [f"{city[::-1]} - {income:.2f} ILS" for city, income in zip(df['cust_city'], df['total_price_with_discount'])]
 
@@ -190,7 +190,7 @@ FROM
     silver_badim.orders
         
         
-WHERE toDate(status_date) >= toDate('{start_date}') AND toDate(status_date) <= toDate('{end_date}')
+WHERE toDate(status_date) >= toDate(%(start_date)s) AND toDate(status_date) <= toDate(%(end_date)s)
 {filter_for_query('order_status', status_regular_orders)}
 
 
@@ -200,7 +200,7 @@ ORDER BY
 
     agg_date;
 '''
-df = client.query_dataframe(query)
+df = client.query_dataframe(query, params=params)
 df['agg_date'] = pd.to_datetime(df['agg_date'])
 # fill missing dates with 0
 df = df.set_index('agg_date').resample(agg_time_freq).sum().fillna(0).reset_index()
@@ -214,7 +214,3 @@ print(df)
 plt.plot(df['agg_date'], df['unique_customers'])
 plt.show()
 
-value = ['2200000']
-query = "SELECT * FROM silver_badim.orders WHERE cust_id in %(value)s"
-result = client.query_dataframe(query, params={'value': value})
-print(result)
