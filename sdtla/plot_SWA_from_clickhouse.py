@@ -3,13 +3,15 @@ import clickhouse_driver
 import os
 import matplotlib.colors as mcolors
 import matplotlib.pyplot as plt
+import matplotlib.lines as mlines
+
 import numpy as np
 from matplotlib.lines import Line2D
 
 ###### inputs ######
 start_date_for_check_results = '2023-06-01'
 end_date_for_check_results = '2024-05-31'
-unique_ids = ['20009902', '20005904', '20024900', 'b']
+unique_ids = ['20009902', '20005904', '20024900', 'a']
 number_of_months_to_predict = 5
 metric = 'MAE'
 ###############
@@ -36,6 +38,9 @@ line_style_legend = [Line2D([0], [0], color='black', linestyle='-', label='Actua
 plt.figure(figsize=(15, 7))
 final_ds_to_plot = pd.DataFrame()
 for unique_id in unique_ids:
+    if unique_id not in df['unique_id'].unique():
+        print("unique_id", unique_id, "not in the data")
+        continue
     df_unique_id_for_check = df[(pd.to_datetime(df['ds']) >= start_date_for_check_results) & (pd.to_datetime(df['ds']) <= end_month_to_predict) & (df['unique_id'] == unique_id)]
     df_unique_id_for_check_with_end_date = df_unique_id_for_check[df_unique_id_for_check['ds'] == end_month_to_predict]
     w_s_list_to_delete = df_unique_id_for_check_with_end_date[df_unique_id_for_check_with_end_date['SWA_value'].isnull()][['w', 's']].values
@@ -57,14 +62,22 @@ for unique_id in unique_ids:
 final_ds_to_plot_swa = final_ds_to_plot.pivot_table(index='ds', columns='unique_id', values='SWA_value', aggfunc='first')
 final_ds_to_plot_y = final_ds_to_plot.pivot_table(index='ds', columns='unique_id', values='y', aggfunc='first')
 plt.figure(figsize=(15, 7))
-colors_swa = [color_map[col] for col in final_ds_to_plot_swa.columns]
-colors_y = [color_map[col] for col in final_ds_to_plot_y.columns]
+colors = [color_map[col] for col in final_ds_to_plot_swa.columns]
 final_ds_to_plot_y = final_ds_to_plot_y.reindex(final_ds_to_plot_swa.index)
 print("final_ds_to_plot_y", final_ds_to_plot_y)
 # Plotting
 fig, ax = plt.subplots(figsize=(15, 7))
-final_ds_to_plot_swa.plot(ax=ax, color=colors_swa, linestyle='--')
-final_ds_to_plot_y.plot(ax=ax, color=colors_y, linestyle='-')
-ax.legend()
+final_ds_to_plot_swa.plot(ax=ax, color=colors, linestyle='--')
+final_ds_to_plot_y.plot(ax=ax, color=colors, linestyle='-')
+color_legend_handles = [mlines.Line2D([0], [0], color=color_map[col], lw=2, label=col) for col in final_ds_to_plot_swa.columns]
+style_legend_handles = [
+    mlines.Line2D([0], [0], color='black', linestyle='--', lw=2, label='SWA Prediction'),
+    mlines.Line2D([0], [0], color='black', linestyle='-', lw=2, label='Actual')
+]
+
+# Add legends to the plot
+legend1 = ax.legend(handles=color_legend_handles, title='Unique IDs', loc='upper left')
+ax.add_artist(legend1)
+legend2 = ax.legend(handles=style_legend_handles, title='Line Style', loc='upper right')
 plt.title('SWA values and y values, metric: ' + metric)
 plt.show()
